@@ -596,12 +596,20 @@ struct ExpandedPlayer: View {
                 }
             }
             ZStack {
-                if ui.volumeOpen {
+                if let notice = ui.notice {
+                    Label(notice, systemImage: "exclamationmark.circle")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, minHeight: 14)
+                        .transition(.opacity)
+                } else if ui.volumeOpen {
                     VolumeRow(ui: ui).transition(.opacity)
                 } else {
                     ProgressScrubber(state: state, gradient: prefs.gradientProgress, totalTime: prefs.showTotalTime).transition(.opacity)
                 }
             }
+            .animation(.easeInOut(duration: 0.25), value: ui.notice)
             .padding(.top, 14)
             // Podcasts skip within the episode (15 s back, 30 s ahead) instead of changing track.
             let podcast = state.isPodcast && state.duration > 0
@@ -649,6 +657,7 @@ struct ExpandedPlayer: View {
 
 struct MediaSettingsView: View {
     @Bindable var prefs = MediaPreferences.shared
+    @Bindable var spotify = SpotifyWeb.shared
 
     /// The built-in modes, plus the saved choice and whichever Focus is on (custom modes are
     /// only known once seen, and only with Full Disk Access).
@@ -725,6 +734,19 @@ struct MediaSettingsView: View {
                 }
                 Toggle("Ignore browsers", isOn: $prefs.excludeBrowsers)
                 Toggle("Ignore calls and chat apps", isOn: $prefs.excludeInapt)
+            }
+            Section("Spotify") {
+                TextField("Client ID", text: $spotify.clientID, prompt: Text("From your app's settings"))
+                    .disabled(spotify.connected)
+                LabeledContent("Redirect URI") { Text(SpotifyWeb.redirectURI).textSelection(.enabled) }
+                LabeledContent {
+                    Button(spotify.connected ? "Disconnect" : "Connect") {
+                        if spotify.connected { spotify.disconnect() } else { spotify.connect() }
+                    }
+                } label: {
+                    Text(spotify.status)
+                    Text("For likes, explicit tags, repeat one and podcasts: create an app at developer.spotify.com (Web API), add the redirect URI above, paste its Client ID.")
+                }
             }
             Section("Source") {
                 LabeledContent("Now playing", value: sourceDescription)

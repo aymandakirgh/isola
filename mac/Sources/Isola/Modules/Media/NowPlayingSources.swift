@@ -27,6 +27,8 @@ struct NowPlayingSnapshot {
     var inTransition = false
     /// "Lossless", "Hi-Res Lossless" or "Dolby Atmos".
     var audioFormat: String?
+    /// A podcast episode in Spotify.
+    var episode = false
 }
 
 /// Polls/receives now-playing info and routes media commands to whichever source is live:
@@ -108,6 +110,7 @@ final class NowPlayingSources {
     /// Adds the consent-gated extras, then hands the snapshot to the Media module.
     private func deliver(_ snapshot: NowPlayingSnapshot?) {
         last = snapshot
+        SpotifyWeb.shared.follow(snapshot)
         guard var s = snapshot else { return MediaController.shared.apply(nil) }
         let key = "\(s.bundleID ?? "")\u{1f}\(s.title)\u{1f}\(s.artist)"
         if key != trackKey {
@@ -124,8 +127,15 @@ final class NowPlayingSources {
             // Music favourites go through AppleScript, whatever MediaRemote offers.
             if id == ScriptPlayer.music.bundleID { s.canLike = askable }
         }
+        // Spotify's Web API, once connected: like, explicit, repeat one, episodes.
+        SpotifyWeb.shared.merge(into: &s)
         if let liked, s.liked == nil || Date() < liked.until { s.liked = liked.value }
         MediaController.shared.apply(s)
+    }
+
+    /// The last snapshot again, with what Spotify's Web API just said.
+    func redeliver() {
+        if !SimulatedPlayer.shared.active { deliver(last) }
     }
 
     /// Off the main thread: what Automation already allows for the source app (never prompts),
@@ -147,14 +157,16 @@ final class NowPlayingSources {
         }
     }
 
-    /// Music: AppleScript favourite (the click may ask for Automation once). Others: MediaRemote's
-    /// LikeTrack, shown at once and corrected by the source within two seconds if it disagrees.
+    /// Music: AppleScript favourite (the click may ask for Automation once). Spotify, once connected:
+    /// its Web API library. Others: MediaRemote's LikeTrack, shown at once and corrected by the
+    /// source within two seconds if it disagrees.
     private func toggleLike() {
         let state = NowPlayingState.shared
         let want = !state.liked
         liked = (want, Date().addingTimeInterval(2))
         state.liked = want
         if case .simulated = source { return SimulatedPlayer.shared.setLiked(want) }
+        if SpotifyWeb.shared.like(want) { return }
         guard state.sourceBundleID == ScriptPlayer.music.bundleID else {
             if case .bridge = source { MediaRemoteBridge.shared.send("like \(want ? 1 : 0)") }
             return
@@ -238,7 +250,9 @@ final class NowPlayingSources {
         commands.next = route(sim: { $0.skip(1) }, remote: .nextTrack, script: { $0.perform("next track") })
         commands.previous = route(sim: { $0.skip(-1) }, remote: .previousTrack, script: { $0.perform("previous track") })
         commands.toggleShuffle = route(sim: { $0.toggleShuffle() }, remote: .advanceShuffleMode, script: { $0.toggleShuffle() })
-        commands.cycleRepeat = route(sim: { $0.cycleRepeat() }, remote: .advanceRepeatMode, script: { $0.cycleRepeat() })
+        // Spotify's Web API knows repeat one; the app's own repeat stays the fallback.
+        let cycleRepeat = route(sim: { $0.cycleRepeat() }, remote: .advanceRepeatMode, script: { $0.cycleRepeat() })
+        commands.cycleRepeat = { MainActor.assumeIsolated { if !SpotifyWeb.shared.cycleRepeat(fallback: cycleRepeat) { cycleRepeat() } } }
         commands.seek = { time in
             MainActor.assumeIsolated {
                 let sources = NowPlayingSources.shared
@@ -450,6 +464,7 @@ enum ScriptPlayer: CaseIterable {
         case .spotify:
             s.repeatMode = f[7] == "true" ? 2 : 0
             s.link = NowPlayingExtras.spotifyLink(f[8])
+            s.episode = f[8].hasPrefix("spotify:episode:")
             if f.count > 9, let url = URL(string: f[9]) {
                 if let cached = Self.artworkCache[f[9]] {
                     s.artwork = cached

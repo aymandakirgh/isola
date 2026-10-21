@@ -34,8 +34,10 @@ final class NowPlayingState {
     var audioFormat: String?
     /// A link is known, or the player can be asked for one (Spotify, browser tabs).
     var canCopyLink = false
+    /// A podcast episode in a player that also plays music (Spotify).
+    var isEpisode = false
     var hasTrack: Bool { !title.isEmpty || !artist.isEmpty }
-    var isPodcast: Bool { sourceBundleID == "com.apple.podcasts" }
+    var isPodcast: Bool { isEpisode || sourceBundleID == "com.apple.podcasts" }
 
     /// Commands are wired by the Media module.
     var commands = MediaCommands()

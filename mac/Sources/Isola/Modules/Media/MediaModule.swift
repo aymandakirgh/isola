@@ -85,6 +85,16 @@ final class MediaUI {
     var muted = false
     /// Pointer over the expanded artwork (unit square) for the glare; nil leaves it at rest.
     var glarePoint: UnitPoint?
+    /// One line in place of the progress bar for a few seconds (a Spotify command was refused).
+    var notice: String?
+
+    func show(notice text: String) {
+        notice = text
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            if notice == text { notice = nil }
+        }
+    }
 
     func refreshOutput() {
         output = SystemAudio.output()
@@ -117,8 +127,10 @@ final class MediaController {
     private var lastTrackKey = ""
     private var lastSnapshot: NowPlayingSnapshot?
     private var artworkID = ""
-    /// `isolactl media.play app=<bundle id>`: the simulated track claims that app (e.g. com.apple.podcasts).
+    /// `isolactl media.play app=<bundle id>`: the simulated track claims that app (e.g. com.apple.podcasts);
+    /// `episode=1` makes it a podcast episode, as Spotify's Web API reports one.
     var simulatedApp: String?
+    var simulatedEpisode = false
 
     private static let browsers: Set<String> = [
         "com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox", "com.microsoft.edgemac", "company.thebrowser.Browser",
@@ -153,6 +165,7 @@ final class MediaController {
     func apply(_ snapshot: NowPlayingSnapshot?) {
         var snapshot = snapshot
         if SimulatedPlayer.shared.active, let app = simulatedApp { snapshot?.bundleID = app }
+        if SimulatedPlayer.shared.active, simulatedEpisode { snapshot?.episode = true }
         lastSnapshot = snapshot
         // Media without a title or artist (a bare stream, an untagged video) still counts while its app plays it.
         guard let s = snapshot, !(s.title.isEmpty && s.artist.isEmpty) || (s.bundleID != nil && (s.isPlaying || s.duration > 0)),
@@ -183,6 +196,7 @@ final class MediaController {
         state.repeatMode = s.repeatMode
         state.sourceBundleID = s.bundleID
         state.isExplicit = s.explicit
+        state.isEpisode = s.episode
         state.canLike = s.canLike
         state.liked = s.liked ?? false
         state.inTransition = s.inTransition
@@ -281,6 +295,7 @@ enum MediaModule {
             // blank=1: no title or artist, so the player falls back to the app's name.
             let blank = args["blank"] != nil
             MediaController.shared.simulatedApp = args["app"]
+            MediaController.shared.simulatedEpisode = args["episode"] == "1"
             sim.start(title: blank ? "" : args["title"], artist: blank ? "" : args["artist"], album: args["album"])
         }
         Debug.on("media.pause") { _ in if NowPlayingState.shared.isPlaying { NowPlayingState.shared.commands.togglePlay() } }
@@ -296,12 +311,15 @@ enum MediaModule {
         Debug.on("media.pref") { args in for (k, v) in args { MediaPreferences.shared.set(k, v) } }
         Debug.on("media.volume") { MediaUI.shared.volumeOpen = $0["on"] != "0" }
         Debug.on("media.like") { _ in NowPlayingState.shared.commands.toggleLike() }
+        Debug.on("media.repeat") { _ in NowPlayingState.shared.commands.cycleRepeat() }
+        Debug.on("media.notice") { MediaUI.shared.show(notice: $0["text"] ?? SpotifyWeb.problem(nil)) }
         Debug.on("media.open") { _ in NowPlayingState.shared.commands.openSource() }
         Debug.on("media.copylink") { _ in NowPlayingState.shared.commands.copyLink { _ in } }  // then: pbpaste
         Debug.on("media.state") { _ in
             let s = NowPlayingState.shared
             Debug.reply("source=\(NowPlayingSources.shared.source) playing=\(s.isPlaying) title=\(s.title) app=\(s.sourceBundleID ?? "-") "
-                + "canLike=\(s.canLike) liked=\(s.liked) link=\(s.canCopyLink) format=\(s.audioFormat ?? "-") automix=\(s.inTransition)")
+                + "canLike=\(s.canLike) liked=\(s.liked) link=\(s.canCopyLink) format=\(s.audioFormat ?? "-") automix=\(s.inTransition) "
+                + "explicit=\(s.isExplicit) repeat=\(s.repeatMode) podcast=\(s.isPodcast) spotify=\(SpotifyWeb.shared.summary)")
         }
     }
 
@@ -403,7 +421,7 @@ enum MediaModule {
                 .background(Color.black)
         }
         // Entries named "*settings" are snapshotted through a hosting view by the core gallery.
-        Gallery.add("media-settings", size: CGSize(width: 520, height: 940)) {
+        Gallery.add("media-settings", size: CGSize(width: 520, height: 1240)) {
             MediaSettingsView().background(Color(nsColor: .windowBackgroundColor))
         }
 
@@ -419,5 +437,19 @@ enum MediaModule {
         automix.inTransition = true
         Gallery.island("media-peek-automix", item: MediaActivity.item(state: automix, ui: ui), peeking: true)
         Gallery.island("media-expanded-automix", item: MediaActivity.item(state: automix, ui: ui), expanded: true)
+
+        // Spotify through its Web API: liked, explicit, repeat one; an episode; a refused command.
+        SpotifyWeb.selfCheck()
+        let spotify = SimulatedPlayer.sampleState(index: 1, playing: true)
+        (spotify.sourceBundleID, spotify.canLike, spotify.liked, spotify.repeatMode, spotify.canCopyLink) = ("com.spotify.client", true, true, 1, true)
+        Gallery.island("media-expanded-spotify", item: MediaActivity.item(state: spotify, ui: ui), expanded: true)
+        let episode = SimulatedPlayer.sampleState(index: 0, playing: true)
+        (episode.sourceBundleID, episode.isEpisode, episode.title, episode.artist) = ("com.spotify.client", true, "Tides, Part 2", "Harbour Radio")
+        (episode.canLike, episode.canCopyLink) = (true, true)
+        Gallery.island("media-peek-spotify-episode", item: MediaActivity.item(state: episode, ui: ui), peeking: true)
+        Gallery.island("media-expanded-spotify-episode", item: MediaActivity.item(state: episode, ui: ui), expanded: true)
+        let refusedUI = MediaUI()
+        (refusedUI.offscreen, refusedUI.notice) = (true, SpotifyWeb.problem((403, Data(#"{"error":{"reason":"PREMIUM_REQUIRED"}}"#.utf8))))
+        Gallery.island("media-expanded-spotify-refused", item: MediaActivity.item(state: spotify, ui: refusedUI), expanded: true)
     }
 }
