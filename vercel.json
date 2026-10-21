@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/((?!assets/|images/|sounds/|videos/|downloads/|favicon).*)",
-      "destination": "/index.html"
+      "destination": "/"
     }
   ],
   "headers": [
