@@ -191,6 +191,12 @@ private enum LockScreenGallery {
         Gallery.add("lockscreen-info-charging-lowdevice", size: CGSize(width: 1040, height: 90)) {
             backdrop { LockInfoRow(data: charging, options: LockScreenOptions()) }
         }
+        var airpodsMax = s
+        let green = BluetoothMonitor.maxColors[0x11]?.tint
+        airpodsMax.devices = [ConnectedDevice(id: "max", name: "AirPods Max", symbol: DeviceSymbol.first(["airpods.max", "airpodsmax"]), battery: 0.62, caseBattery: nil, tint: green)]
+        Gallery.add("lockscreen-info-airpodsmax-lightgreen", size: CGSize(width: 1040, height: 90)) {
+            backdrop { LockInfoRow(data: airpodsMax, options: LockScreenOptions()) }
+        }
         // Forms are AppKit-backed and come out blank in ImageRenderer: snapshot a hosting view instead.
         let settingsSize = CGSize(width: 560, height: 800)
         if let settings = snapshot(LockScreenSettingsView(), size: settingsSize) {

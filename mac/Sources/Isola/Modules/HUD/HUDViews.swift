@@ -35,7 +35,9 @@ struct HUDPart: View {
         } else if silent {
             Image(systemName: "speaker.slash.fill").islandSymbol(15).contentTransition(.symbolEffect(.replace))
         } else if let device = s.output.symbol {
-            Image(systemName: device).islandSymbol(16).contentTransition(.symbolEffect(.replace))
+            Image(systemName: device).islandSymbol(16)
+                .foregroundStyle(s.output.deviceTint.map { Color(nsColor: $0) } ?? Palette.ink)
+                .contentTransition(.symbolEffect(.replace))
         } else {
             // Wave count follows the level, like the macOS speaker glyph.
             Image(systemName: "speaker.wave.3.fill", variableValue: s.level).islandSymbol(15)

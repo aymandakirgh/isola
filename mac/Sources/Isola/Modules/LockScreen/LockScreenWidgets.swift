@@ -445,6 +445,7 @@ struct LockInfoRow: View {
                 ForEach(data.devices) { device in
                     HStack(spacing: 6) {
                         Image(systemName: device.symbol).font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(device.tint.map { Color(nsColor: $0) } ?? LockPalette.purple.opacity(0.9))
                         if let level = device.battery {
                             BatteryRing(level: level, size: 16, lineWidth: 2)
                             Text("\(Int((level * 100).rounded()))%")

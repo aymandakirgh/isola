@@ -70,6 +70,8 @@ struct HUDOutput: Equatable {
     var dataSource: UInt32?
     /// Symbol of the Bluetooth device Isola recognised by product ID (renamed AirPods too).
     var deviceSymbol: String?
+    /// That device's colour (an AirPods Max finish), tinting the glyph.
+    var deviceTint: NSColor?
     /// CoreAudio model UID.
     var model: String?
 
@@ -123,11 +125,12 @@ struct HUDOutput: Equatable {
         }
     }
 
-    init(name: String, transport: UInt32, dataSource: UInt32? = nil, deviceSymbol: String? = nil, model: String? = nil) {
+    init(name: String, transport: UInt32, dataSource: UInt32? = nil, deviceSymbol: String? = nil, deviceTint: NSColor? = nil, model: String? = nil) {
         self.name = name
         self.transport = transport
         self.dataSource = dataSource
         self.deviceSymbol = deviceSymbol
+        self.deviceTint = deviceTint
         self.model = model
     }
 }
@@ -285,7 +288,9 @@ enum HUDModule {
         Debug.on("hud.volume") { args in
             if args["elsewhere"] == "1", !syncsExternalChanges { return }
             let level = args["level"].flatMap(Double.init) ?? 0.5
-            let output = args["device"].map(HUDOutput.preset) ?? HUDOutput.preset("speakers")
+            var output = args["device"].map(HUDOutput.preset) ?? HUDOutput.preset("speakers")
+            // A device of that name from `system.bluetooth color=…` lends its colour, as a real one does.
+            output.deviceTint = DevicesState.shared.devices.first { $0.name == output.name }?.tint
             show(HUDSnapshot(kind: .volume, level: level, muted: args["muted"] == "1", decibels: HUDOutput.approximateDecibels(level), output: output))
             if args["push"] == "1" { rubberBand() }
         }
@@ -352,6 +357,9 @@ enum HUDModule {
         add("volume-muted", volume(0.5, muted: true))
         add("volume-airpodspro", volume(0.62, device: "airpodspro"))
         add("volume-airpodsmax-notch", volume(0.4, device: "airpodsmax"), geometry: .notchPreview)
+        var blue = volume(0.4, device: "airpodsmax")
+        blue.output.deviceTint = BluetoothMonitor.maxColors[0x03]?.tint
+        add("volume-airpodsmax-blue", blue)
         add("volume-notch", volume(0.5), geometry: .notchPreview)
         add("style-bar-compact", volume(0.5), compact)
         add("style-bar-compact-notch", volume(0.5), compact, geometry: .notchPreview)
