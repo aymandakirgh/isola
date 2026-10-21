@@ -74,7 +74,9 @@ enum SystemModule {
             if a["on"] == "0" {
                 BluetoothMonitor.shared.disconnect(device)
             } else {
-                BluetoothMonitor.shared.connect(device, earbuds: kind.earbuds, announce: true)
+                // A simulation always shows, even with real device notifications turned off.
+                BluetoothMonitor.shared.connect(device, earbuds: kind.earbuds, announce: false)
+                Island.shared.post(BluetoothItems.connected(device, earbuds: kind.earbuds))
             }
         }
         Debug.on("system.focus") { a in

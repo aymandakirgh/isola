@@ -45,8 +45,12 @@ enum Debug {
         on("pref") { args in for (k, v) in args { Preferences.shared.set(k, v) } }
         on("quit") { _ in NSApp.terminate(nil) }
         on("state") { _ in
-            let s = "current=\(island.current?.id ?? "none") activities=\(island.activities.map(\.id)) expanded=\(island.expanded) peeking=\(island.peeking)"
-            DistributedNotificationCenter.default().postNotificationName(.init("app.isola.debug.reply"), object: s, userInfo: nil, deliverImmediately: true)
+            reply("current=\(island.current?.id ?? "none") activities=\(island.activities.map(\.id)) expanded=\(island.expanded) peeking=\(island.peeking)")
         }
+    }
+
+    /// Answer a `state` / `*.state` command; isolactl prints it.
+    static func reply(_ text: String) {
+        DistributedNotificationCenter.default().postNotificationName(.init("app.isola.debug.reply"), object: text, userInfo: nil, deliverImmediately: true)
     }
 }

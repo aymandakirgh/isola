@@ -8,6 +8,7 @@ enum SettingsModule {
         License.shared.start()
         StatusItem.shared.install()
         Debug.on("settings.open") { SettingsWindow.show(section: $0["section"]) }
+        Debug.on("settings.close") { _ in SettingsWindow.close() }
         Debug.on("settings.onboarding") { _ in OnboardingWindow.show() }
         Debug.on("license.set") { License.shared.activate($0["key"] ?? "") }
         Debug.on("license.reset") { _ in License.shared.reset() }

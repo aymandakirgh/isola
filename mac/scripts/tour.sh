@@ -52,16 +52,30 @@ step media.pause;                       shot media-paused
 step media.resume
 
 step cal.event title="Design review" in=4; shot calendar-activity
+step expand on=1;                       WAIT=1.2 shot calendar-expanded 300
+step expand on=0
 step cycle;                             shot cycled-activity
 step cal.leave title="Design review";   shot time-to-leave
 step dismiss
-step expand on=1;                       WAIT=1.2 shot calendar-expanded 300
-step expand on=0
 step timer.start seconds=95;            shot timer
 step timer.stop
 step cal.clear
 step media.end
 
+step pref showIdlePill=1
 step hover on=1;                        shot hover
 step hover on=0
+step pref showIdlePill=0
+
+# Full-screen views: settings window and the Lock Screen widget preview.
+big() { n=$((n + 1)); sleep "${WAIT:-1.5}"; screencapture -x "$OUT/$(printf %02d $n)-$1.png"; }
+step settings.open section=general;     big settings-general
+step settings.open section=media;       big settings-media
+step settings.open section=hud;         big settings-hud
+step settings.open section=license;     big settings-license
+step settings.close
+step media.play title="Ocean Breeze" artist="Isola Ensemble"
+step lock.preview on=1;                 WAIT=2 big lockscreen-preview
+step lock.preview on=0
+step media.end
 echo "tour: $n screenshots in $OUT"

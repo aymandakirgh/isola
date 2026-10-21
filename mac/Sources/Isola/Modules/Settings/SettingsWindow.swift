@@ -94,6 +94,10 @@ enum SettingsWindow {
         w.makeKeyAndOrderFront(nil)
     }
 
+    static func close() {
+        window?.close()
+    }
+
     static func makeWindow(nav: SettingsNav) -> NSWindow {
         let w = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 680, height: 520),
