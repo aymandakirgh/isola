@@ -126,6 +126,7 @@ enum SystemModule {
             Gallery.island("system-focus-on-\(suffix)", item: FocusItems.changed(work, on: true), geometry: g)
             Gallery.island("system-focus-off-\(suffix)", item: FocusItems.changed(sleep, on: false), geometry: g)
             Gallery.island("system-focus-activity-\(suffix)", item: FocusItems.activity(work), geometry: g)
+            Gallery.island("system-focus-activity-peek-\(suffix)", item: FocusItems.activity(work), peeking: true, geometry: g)
             Gallery.island("system-lock-\(suffix)", item: LockMonitor.item(unlocked: false), geometry: g)
             Gallery.island("system-unlock-\(suffix)", item: LockMonitor.item(unlocked: true), geometry: g)
         }
@@ -156,6 +157,12 @@ enum SystemModule {
         let config = #"{"data":[{"modeConfigurations":{"x":{"mode":{"modeIdentifier":"com.apple.focus.work","name":"Deep Work","symbolImageName":"laptopcomputer"}}}}]}"#
         let configJSON = try? JSONSerialization.jsonObject(with: Data(config.utf8))
         assert(FocusMonitor.modeDictionary("com.apple.focus.work", in: configJSON as Any)?["name"] as? String == "Deep Work", "DND config")
+        for (language, sleep) in ["it": "Sonno", "de": "Schlafen", "fr": "Repos", "es": "Descanso", "en": "Sleep"] {
+            precondition(FocusL10n.text("Sleep", language: language) == sleep, "Focus name in \(language)")
+        }
+        precondition(FocusL10n.text("Deep Work", language: "it") == "Deep Work", "custom names stay as they are")
+        precondition(FocusL10n.language(for: ["it-IT", "en-US"]) == "it" && FocusL10n.language(for: ["nl-NL", "de-DE"]) == "de"
+            && FocusL10n.language(for: ["ja-JP"]) == "en", "Focus language pick")
         assert(PowerItems.symbol(for: 0.05) == "battery.0percent" && PowerItems.symbol(for: 0.5) == "battery.50percent", "battery symbol")
         assert(PowerItems.minutes(72) == "1h 12m" && PowerItems.minutes(9) == "9 min", "minutes")
         let r = PowerMonitor.read()
