@@ -131,6 +131,9 @@ struct IslandBody: View {
         let g = geometry
         if state.expanded, let item = state.item, let expanded = item.expanded {
             expanded
+                .frame(width: size.width, height: size.height, alignment: .top)
+                // While the panel springs open (or holds more than fits) its content blurs into the bottom edge.
+                .progressiveBlur(radius: 5, sharp: BottomRamp(length: 10), blurred: BottomRamp(length: 10, reversed: true))
                 .id("expanded-\(item.id)")
                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)).animation(.easeOut(duration: 0.25)))
         } else {
@@ -198,6 +201,18 @@ private struct TopFade: View {
         VStack(spacing: 0) {
             LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: length)
             Color.black
+        }
+    }
+}
+
+/// Mask that is opaque and ramps to clear over the bottom `length` points (or the reverse).
+private struct BottomRamp: View {
+    var length: CGFloat
+    var reversed = false
+    var body: some View {
+        VStack(spacing: 0) {
+            reversed ? Color.clear : Color.black
+            LinearGradient(colors: reversed ? [.clear, .black] : [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: length)
         }
     }
 }

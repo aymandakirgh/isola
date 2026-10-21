@@ -63,6 +63,7 @@ enum CoreDemo {
         IslandWindows.selfCheck()
         Island.selfCheck()
         Fullscreen.selfCheck()
+        MarqueeModel.selfCheck()
         Gallery.island("core-idle-notch", item: nil, geometry: .notchPreview)
         Gallery.island("core-activity-pill", item: item())
         Gallery.island("core-activity-notch", item: item(), geometry: .notchPreview)
@@ -84,12 +85,30 @@ enum CoreDemo {
         Gallery.island("core-outline-compact-expanded", item: item(), expanded: true, outline: .compact)
         Gallery.island("core-outline-contrast-expanded", item: music, expanded: true, outline: .contrast, geometry: .notchPreview)
         Gallery.island("core-duo-outline", item: music, secondary: timer, outline: .contrast, geometry: .notchPreview)
+        // Mid-spring: the player is still shorter than its content, which blurs into the bottom edge.
+        Gallery.island("core-edge-blur", item: music, expanded: true, size: CGSize(width: 420, height: 134))
         // Whole General and Island pages (the settings window crops them).
         Gallery.add("core-general-settings", size: CGSize(width: 520, height: 1010)) {
             GeneralPage(nav: SettingsNav()).background(Color(nsColor: .windowBackgroundColor))
         }
         Gallery.add("core-island-settings", size: CGSize(width: 520, height: 640)) {
             IslandPage().background(Color(nsColor: .windowBackgroundColor))
+        }
+        // The marquee resting left-aligned, then mid-scroll with both edges soft.
+        for (name, clock) in [("core-marquee-rest", 0.5), ("core-marquee-scrolling", 3.0)] {
+            Gallery.add(name, size: CGSize(width: 300, height: 56), hosted: true) {
+                ZStack {
+                    LinearGradient(colors: [Color(red: 0.25, green: 0.2, blue: 0.62), Color(red: 0.42, green: 0.24, blue: 0.7)], startPoint: .top, endPoint: .bottom)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.black).frame(width: 250, height: 36)
+                    Marquee(clock: clock) {
+                        Text("Isola core demo · a title long enough to scroll")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Palette.muted)
+                            .padding(.horizontal, 6)
+                    }
+                    .frame(width: 230, height: 16)
+                }
+            }
         }
     }
 }

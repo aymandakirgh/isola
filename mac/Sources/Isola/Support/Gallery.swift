@@ -15,23 +15,26 @@ enum Gallery {
     private struct Entry {
         let name: String
         let size: CGSize
+        let hosted: Bool
         let view: AnyView
     }
 
     private static var entries: [Entry] = []
 
-    static func add<V: View>(_ name: String, size: CGSize, @ViewBuilder _ view: () -> V) {
-        entries.append(Entry(name: name, size: size, view: AnyView(view())))
+    /// `hosted` snapshots through a live hosting view, for views that settle after appearing
+    /// (`ImageRenderer` draws only the first pass).
+    static func add<V: View>(_ name: String, size: CGSize, hosted: Bool = false, @ViewBuilder _ view: () -> V) {
+        entries.append(Entry(name: name, size: size, hosted: hosted, view: AnyView(view())))
     }
 
     /// The island in a given state over a wallpaper-like strip, as it sits under the menu bar.
-    /// Outline shots use a dark wallpaper, where outlines matter.
+    /// Outline shots use a dark wallpaper, where outlines matter; `size` freezes a mid-spring frame.
     static func island(
         _ name: String, item: IslandItem?, secondary: IslandItem? = nil, expanded: Bool = false, peeking: Bool = false,
-        hovering: Bool = false, outline: OutlineStyle = .none, geometry g: NotchGeometry = .pillPreview
+        hovering: Bool = false, outline: OutlineStyle = .none, size override: CGSize? = nil, geometry g: NotchGeometry = .pillPreview
     ) {
         let state = IslandState(item: item, secondary: secondary, expanded: expanded, peeking: peeking, hovering: hovering)
-        let size = Island.size(for: state, in: g)
+        let size = override ?? Island.size(for: state, in: g)
         let radii = Island.radii(for: state, in: g)
         let canvas = CGSize(width: max(size.width + 120, 420), height: size.height + g.topMargin + 40)
         let wallpaper = outline == .none
@@ -51,7 +54,7 @@ enum Gallery {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for entry in entries {
             let url = dir.appendingPathComponent("\(entry.name).png")
-            let rep = entry.name.hasSuffix("settings") ? hostedSnapshot(entry) : rendererSnapshot(entry)
+            let rep = entry.hosted || entry.name.hasSuffix("settings") ? hostedSnapshot(entry) : rendererSnapshot(entry)
             try? rep?.representation(using: .png, properties: [:])?.write(to: url)
         }
         print("rendered \(entries.count) gallery entries to \(dir.path)")
