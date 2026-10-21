@@ -119,13 +119,16 @@ struct LockScreenOptions {
     var weatherStyle: WeatherWidgetStyle = .compact
     var offset: Double = 0
     var showVolume = false
+    /// Calendar › "Use calendar colours".
+    var calendarColors = true
 
     @MainActor static var current: LockScreenOptions {
         let p = LockScreenPreferences.shared
         return LockScreenOptions(
             showNowPlaying: p.showNowPlaying, showFocus: p.showFocus, showWeather: p.showWeather, showBattery: p.showBattery,
             showConnectivity: p.showConnectivity, showCalendar: p.showCalendar, style: p.nowPlayingStyle,
-            weatherStyle: p.weatherStyle, offset: p.nowPlayingOffset, showVolume: p.showVolumeControl
+            weatherStyle: p.weatherStyle, offset: p.nowPlayingOffset, showVolume: p.showVolumeControl,
+            calendarColors: CalendarPreferences.shared.calendarColors
         )
     }
 }
@@ -429,7 +432,7 @@ struct LockInfoRow: View {
             }
             if options.showCalendar, let event = data.event {
                 HStack(spacing: 7) {
-                    Circle().fill(Color(nsColor: event.calendarColor)).frame(width: 8, height: 8)
+                    Circle().fill(event.tint(options.calendarColors, neutral: LockPalette.purple)).frame(width: 8, height: 8)
                     Text(event.title).lineLimit(1).layoutPriority(-1)
                     Text(eventTime(event, now: now)).opacity(0.8)
                 }

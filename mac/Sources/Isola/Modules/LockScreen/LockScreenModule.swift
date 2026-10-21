@@ -183,6 +183,9 @@ private enum LockScreenGallery {
         Gallery.add("lockscreen-info-detailed", size: CGSize(width: 1240, height: 90)) {
             backdrop { LockInfoRow(data: s, options: LockScreenOptions(weatherStyle: .detailed)) }
         }
+        Gallery.add("lockscreen-info-nocolor", size: CGSize(width: 1040, height: 90)) {
+            backdrop { LockInfoRow(data: s, options: LockScreenOptions(calendarColors: false)) }
+        }
         var charging = s
         charging.battery = LockBattery(level: 0.46, charging: true, timeToEmpty: nil)
         charging.devices = [ConnectedDevice(id: "low", name: "Studio Headphones", symbol: "headphones", battery: 0.14, caseBattery: nil)]

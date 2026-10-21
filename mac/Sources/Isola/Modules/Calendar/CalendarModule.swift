@@ -25,8 +25,8 @@ final class CalendarPreferences {
     /// Event ids dismissed with a swipe; "Restore dismissed" clears them.
     var dismissed: [String] = load("calendar.dismissed", []) { didSet { store.set(dismissed, forKey: "calendar.dismissed"); CalendarSource.shared.evaluate() } }
 
-    // Expanded calendar look
-    var calendarColors: Bool = load("calendar.colors", true) { didSet { store.set(calendarColors, forKey: "calendar.colors") } }
+    // Calendar look (colours also tint the live activity, its peek and the Lock Screen widget)
+    var calendarColors: Bool = load("calendar.colors", true) { didSet { store.set(calendarColors, forKey: "calendar.colors"); CalendarSource.shared.evaluate() } }
     var splitAllDay: Bool = load("calendar.splitAllDay", true) { didSet { store.set(splitAllDay, forKey: "calendar.splitAllDay") } }
     var lunar: Bool = load("calendar.lunar", false) { didSet { store.set(lunar, forKey: "calendar.lunar") } }
     /// "calendar", "fantastical" or "notion": what clicking today's date opens.
@@ -161,6 +161,7 @@ enum CalendarModule {
             Gallery.island("calendar-timer-\(suffix)", item: CalendarItems.timer(snapshot: timer), geometry: g)
         }
         Gallery.island("calendar-activity-peek", item: CalendarItems.event(review, panel: panel), peeking: true)
+        Gallery.island("calendar-activity-peek-nocolor", item: CalendarItems.event(review, panel: panel, colors: false), peeking: true)
         Gallery.island("calendar-timer-paused", item: CalendarItems.timer(snapshot: TimerSnapshot(end: timer.end, duration: timer.duration, paused: 252)))
         Gallery.island("calendar-timer-done", item: CalendarItems.timerDone())
         Gallery.island("calendar-idle", item: CalendarItems.idle(panel: panel, nextEvent: review))

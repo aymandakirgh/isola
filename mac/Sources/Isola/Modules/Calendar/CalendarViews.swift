@@ -12,16 +12,18 @@ enum CalendarItems {
     static let idleID = "calendar.idle"
     static let panelSize = CGSize(width: 400, height: 200)
 
-    static func event(_ e: CalendarEvent) -> IslandItem { event(e, panel: LiveCalendarPanel()) }
+    static func event(_ e: CalendarEvent) -> IslandItem {
+        event(e, panel: LiveCalendarPanel(), colors: CalendarPreferences.shared.calendarColors)
+    }
 
     /// Upcoming event: colour dot + calendar glyph, countdown; the title peeks on hover.
-    static func event<P: View>(_ e: CalendarEvent, panel: P) -> IslandItem {
+    static func event<P: View>(_ e: CalendarEvent, panel: P, colors: Bool = true) -> IslandItem {
         IslandItem(id: eventID, kind: .liveActivity, priority: 2) {
-            EventLeading(color: e.calendarColor)
+            EventLeading(color: e.tint(colors))
         } trailing: {
             CountdownText(to: e.start).padding(.trailing, 11)
         }
-        .peek(onHover: true) { EventPeek(event: e) }
+        .peek(onHover: true) { EventPeek(event: e, tint: e.tint(colors)) }
         .expanded(size: panelSize) { panel }
         .onOptionTap { CalendarSource.shared.open(e) }
         .onSwipe { direction in
@@ -76,11 +78,18 @@ enum CalendarItems {
 
 // MARK: - Wings
 
+extension CalendarEvent {
+    /// The calendar's colour, or `neutral` with "Use calendar colours" off.
+    func tint(_ colors: Bool, neutral: Color = Palette.muted) -> Color {
+        colors ? Color(nsColor: calendarColor) : neutral
+    }
+}
+
 private struct EventLeading: View {
-    var color: NSColor
+    var color: Color
     var body: some View {
         HStack(spacing: 4) {
-            Circle().fill(Color(nsColor: color)).frame(width: 7, height: 7)
+            Circle().fill(color).frame(width: 7, height: 7)
             Image(systemName: "calendar").islandSymbol(14)
         }
         .padding(.leading, 10)
@@ -101,10 +110,11 @@ private struct CountdownText: View {
 
 private struct EventPeek: View {
     var event: CalendarEvent
+    var tint: Color
     var body: some View {
         Marquee {
             HStack(spacing: 4) {
-                Circle().fill(Color(nsColor: event.calendarColor)).frame(width: 6, height: 6)
+                Circle().fill(tint).frame(width: 6, height: 6)
                 Text(event.title).foregroundStyle(Palette.ink)
                 Text("· \(CalendarText.time(event.start))\(event.location.map { " · \($0)" } ?? "")")
             }
@@ -371,7 +381,7 @@ private struct AllDayChips: View {
         HStack(spacing: 6) {
             ForEach(events.prefix(2)) { e in
                 HStack(spacing: 4) {
-                    Circle().fill(colors ? Color(nsColor: e.calendarColor) : Palette.muted).frame(width: 5, height: 5)
+                    Circle().fill(e.tint(colors)).frame(width: 5, height: 5)
                     Text(e.title).lineLimit(1)
                     if let span = CalendarText.span(e, on: now) { Text(span).foregroundStyle(Palette.muted).fixedSize() }
                 }
@@ -392,7 +402,7 @@ private struct EventRow: View {
     var body: some View {
         let started = event.start <= now
         HStack(spacing: 8) {
-            RoundedRectangle(cornerRadius: 1.5).fill(colors ? Color(nsColor: event.calendarColor) : Palette.muted).frame(width: 3, height: 27)
+            RoundedRectangle(cornerRadius: 1.5).fill(event.tint(colors)).frame(width: 3, height: 27)
             VStack(alignment: .leading, spacing: 1) {
                 Text(event.title).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
                 let when = CalendarText.span(event, on: now) ?? (event.isAllDay ? "All day" : CalendarText.range(event.start, event.end))
@@ -468,7 +478,7 @@ struct CalendarSettingsView: View {
                     .disabled(!prefs.timeToLeave)
                 Toggle("Show the date when nothing else is running", isOn: $prefs.idleActivity)
             }
-            Section("Expanded calendar") {
+            Section("Display") {
                 Toggle("Show declined events", isOn: $prefs.showDeclined)
                 Toggle("Hide subscribed calendars", isOn: $prefs.excludeSubscribed)
                 Toggle("Use calendar colours", isOn: $prefs.calendarColors)
