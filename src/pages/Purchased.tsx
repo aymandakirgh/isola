@@ -4,7 +4,7 @@ import { ContactNote } from "../components/ContactNote";
 import { DownloadCard } from "../components/DownloadCard";
 import { RECEIPT_FRAME_PATH, SealIcon } from "../components/icons";
 import { DOWNLOAD_URL } from "../config";
-import { getCheckout } from "../lib/api";
+import { mintDemoLicense } from "../lib/api";
 import { useMinWidth } from "../lib/breakpoints";
 import { cn } from "../lib/cn";
 import { usePageTransition, type PageProps } from "../lib/router";
@@ -18,14 +18,6 @@ const RECEIPT_LINES: { d: string; lift: number; dash?: [number, number] }[] = [
   { d: "M7.5 22.5H20", lift: -3.5, dash: [14, 6] },
 ];
 
-const isWebUrl = (u: string) => {
-  try {
-    return ["http:", "https:"].includes(new URL(u).protocol);
-  } catch {
-    return false;
-  }
-};
-
 export default function Purchased({ params, search }: PageProps) {
   const page = usePageTransition();
   const lg = useMinWidth("lg");
@@ -33,10 +25,9 @@ export default function Purchased({ params, search }: PageProps) {
   const lines = useRef<SVGPathElement[]>([]);
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
-  const [download, setDownload] = useState("");
-  const href =
-    download ||
-    (code ? `${DOWNLOAD_URL}?code=${encodeURIComponent(code)}` : DOWNLOAD_URL);
+  const href = code
+    ? `${DOWNLOAD_URL}?code=${encodeURIComponent(code)}`
+    : DOWNLOAD_URL;
 
   useEffect(() => {
     const controls = RECEIPT_LINES.flatMap((l, i) => {
@@ -53,19 +44,17 @@ export default function Purchased({ params, search }: PageProps) {
   useEffect(() => {
     const pick = (...keys: string[]) =>
       keys.map((k) => search.get(k)?.trim()).find(Boolean) ?? "";
+    const given = pick("code", "license_key", "licenseKey");
     setEmail(pick("email"));
-    setCode(pick("code", "license_key", "licenseKey"));
-    const id = pick("checkout_id", "session_id") || params.id;
-    if (!id) return;
+    setCode(given);
+    // The no-charge demo checkout mints a real licence (the shared demo key without the server).
+    if (params.id !== "demo" || given) return;
     let live = true;
-    getCheckout(id)
-      .then((c) => {
-        if (!live || !c) return;
-        if (c.email) setEmail(c.email);
-        if (c.license_key) setCode(c.license_key);
-        if (isWebUrl(c.download_url)) setDownload(c.download_url);
-      })
-      .catch(() => {});
+    mintDemoLicense(pick("email")).then((license) => {
+      if (!live) return;
+      setEmail(license.email || "you@example.com");
+      setCode(license.key);
+    });
     return () => {
       live = false;
     };
@@ -135,6 +124,16 @@ export default function Purchased({ params, search }: PageProps) {
               <span className="relative top-px mr-1.5 inline-block h-[13.5px] w-24 animate-pulse rounded-[0.1875rem] bg-orange-950/12.5" />
             )}
             in two separate emails.
+          </p>
+          <p className="mt-4 text-lg font-semibold text-orange-950/60">
+            License key{" "}
+            {code ? (
+              <span className="font-mono whitespace-nowrap text-stone-800 select-all">
+                {code}
+              </span>
+            ) : (
+              <span className="relative top-px inline-block h-[13.5px] w-48 animate-pulse rounded-[0.1875rem] bg-orange-950/12.5" />
+            )}
           </p>
           <DownloadCard href={href} />
           <ContactNote>

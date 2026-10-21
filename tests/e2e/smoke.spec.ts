@@ -1,12 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
 
 // Smoke test standard GH: every route renders without console errors, on desktop and mobile.
+// A failed /api request doesn't count: `vite preview` serves no /api and the pages fall back.
 function collectErrors(page: Page) {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on(
     "console",
-    (msg) => msg.type() === "error" && errors.push(msg.text()),
+    (msg) =>
+      msg.type() === "error" &&
+      !msg.location().url.includes("/api/") &&
+      errors.push(msg.text()),
   );
   return errors;
 }
@@ -40,6 +44,15 @@ test("the download is the real DMG the card describes", async ({ page, request }
   // The Mac app's update feed announces the same version the card offers.
   const feed = await (await request.get("/releases.json")).json();
   await expect(page.getByText(`v${feed.version}`)).toBeVisible();
+});
+
+test("the purchase page shows a license key (the shared demo key without /api)", async ({
+  page,
+}) => {
+  await page.goto("/purchased/demo");
+  await expect(
+    page.getByText(/^ISOLA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/),
+  ).toBeVisible();
 });
 
 test("unknown paths fall back to home", async ({ page }) => {
