@@ -553,14 +553,14 @@ struct Browser {
           set out to ""
           repeat with w from 1 to count of windows
             try
-              set active to 0
+              set activeIndex to 0
               try
-                set active to \(active)
+                set activeIndex to \(active)
               end try
               set titles to \(title) of every tab of window w
               set urls to URL of every tab of window w
               repeat with t from 1 to count of titles
-                set out to out & w & "\(f)" & t & "\(f)" & (t = active) & "\(f)" & ((item t of titles) as text) & "\(f)" & ((item t of urls) as text) & "\(r)"
+                set out to out & w & "\(f)" & t & "\(f)" & (t = activeIndex) & "\(f)" & ((item t of titles) as text) & "\(f)" & ((item t of urls) as text) & "\(r)"
               end repeat
             end try
           end repeat

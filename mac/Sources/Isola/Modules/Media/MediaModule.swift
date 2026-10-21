@@ -192,7 +192,7 @@ enum MediaModule {
         Debug.on("media.end") { _ in sim.stop() }
         Debug.on("media.like") { _ in NowPlayingState.shared.commands.toggleLike() }
         Debug.on("media.open") { _ in NowPlayingState.shared.commands.openSource() }
-        Debug.on("media.copylink") { _ in NowPlayingState.shared.commands.copyLink { Debug.reply("copied=\($0)") } }
+        Debug.on("media.copylink") { _ in NowPlayingState.shared.commands.copyLink { _ in } }  // then: pbpaste
         Debug.on("media.state") { _ in
             let s = NowPlayingState.shared
             Debug.reply("source=\(NowPlayingSources.shared.source) playing=\(s.isPlaying) title=\(s.title) app=\(s.sourceBundleID ?? "-") "
