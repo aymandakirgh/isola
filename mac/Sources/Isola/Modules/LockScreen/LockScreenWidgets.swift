@@ -61,6 +61,8 @@ struct LockScreenData {
     var battery: LockBattery?
     var devices: [ConnectedDevice] = []
     var event: CalendarEvent?
+    /// The default output device (the card's output glyph).
+    var output = HUDOutput(name: "MacBook Pro Speakers", transport: kAudioDeviceTransportTypeBuiltIn)
 
     /// Call inside `body`: reading the @Observable stores makes SwiftUI track them.
     @MainActor static func live(at date: Date = Date()) -> LockScreenData {
@@ -75,7 +77,8 @@ struct LockScreenData {
                 : nil,
             battery: p.hasBattery ? LockBattery(level: p.level, charging: p.charging, timeToEmpty: p.timeToEmpty) : nil,
             devices: DevicesState.shared.devices,
-            event: CalendarState.shared.next
+            event: CalendarState.shared.next,
+            output: SystemAudio.output()  // polled with the band's 1 s refresh
         )
     }
 
@@ -83,7 +86,7 @@ struct LockScreenData {
     func filled(with s: LockScreenData) -> LockScreenData {
         LockScreenData(
             track: track ?? s.track, focus: focus ?? s.focus, weather: weather ?? s.weather,
-            battery: battery ?? s.battery, devices: devices.isEmpty ? s.devices : devices, event: event ?? s.event
+            battery: battery ?? s.battery, devices: devices.isEmpty ? s.devices : devices, event: event ?? s.event, output: output
         )
     }
 
@@ -125,6 +128,8 @@ struct LockScreenOptions {
     var showVolume = false
     /// Calendar › "Use calendar colours".
     var calendarColors = true
+    /// Media › "Grayscale artwork".
+    var grayscaleArtwork = false
 
     @MainActor static var current: LockScreenOptions {
         let p = LockScreenPreferences.shared
@@ -132,7 +137,7 @@ struct LockScreenOptions {
             showNowPlaying: p.showNowPlaying, showFocus: p.showFocus, showWeather: p.showWeather, showBattery: p.showBattery,
             showConnectivity: p.showConnectivity, showCalendar: p.showCalendar, style: p.nowPlayingStyle,
             weatherStyle: p.weatherStyle, offset: p.nowPlayingOffset, showVolume: p.showVolumeControl,
-            calendarColors: CalendarPreferences.shared.calendarColors
+            calendarColors: CalendarPreferences.shared.calendarColors, grayscaleArtwork: MediaPreferences.shared.grayscaleArtwork
         )
     }
 }
@@ -161,32 +166,13 @@ final class NowPlayingActivity {
     }
 }
 
-/// Default output device volume via CoreAudio (for the widget's volume row).
-enum SystemVolume {
-    private static func address(_ selector: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope) -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
-    }
+/// The card's output volume row: live CoreAudio bindings, or fixed values in previews.
+struct LockVolume {
+    var level: Binding<Double>
+    var muted: Binding<Bool>
 
-    private static var device: AudioDeviceID {
-        var id = AudioDeviceID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        var a = address(kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal)
-        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &a, 0, nil, &size, &id)
-        return id
-    }
-
-    static var level: Double {
-        get {
-            var value = Float32(0)
-            var size = UInt32(MemoryLayout<Float32>.size)
-            var a = address(kAudioHardwareServiceDeviceProperty_VirtualMainVolume, kAudioDevicePropertyScopeOutput)
-            return AudioObjectGetPropertyData(device, &a, 0, nil, &size, &value) == noErr ? Double(value) : 0
-        }
-        set {
-            var value = Float32(max(0, min(1, newValue)))
-            var a = address(kAudioHardwareServiceDeviceProperty_VirtualMainVolume, kAudioDevicePropertyScopeOutput)
-            AudioObjectSetPropertyData(device, &a, 0, nil, UInt32(MemoryLayout<Float32>.size), &value)
-        }
+    static func constant(_ level: Double, muted: Bool = false) -> LockVolume {
+        LockVolume(level: .constant(level), muted: .constant(muted))
     }
 }
 
@@ -225,12 +211,16 @@ private func eventTime(_ e: CalendarEvent, now: Date) -> String {
 struct NowPlayingWidget: View {
     var track: LockTrack?
     var style: NowPlayingWidgetStyle = .glass
+    var grayscale = false
+    /// The default output device, drawn at the end of the controls.
+    var output = HUDOutput(name: "MacBook Pro Speakers", transport: kAudioDeviceTransportTypeBuiltIn)
     /// Shows the output volume row when set.
-    var volume: Binding<Double>? = nil
+    var volume: LockVolume? = nil
     var commands: MediaCommands = MediaCommands()
     @Environment(\.lockGalleryRender) private var gallery
 
     var body: some View {
+        let clear = style == .clear
         VStack(spacing: 0) {
             header
             progress.padding(.top, 16)
@@ -239,12 +229,16 @@ struct NowPlayingWidget: View {
         }
         .padding(17)
         .frame(width: 328, height: volume == nil ? 174 : 204)
+        // Clear has no card: artwork and text float over the wallpaper on a soft shadow.
+        .shadow(color: .black.opacity(clear ? 0.45 : 0), radius: clear ? 6 : 0, y: 1)
         .background { background }
         .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay {
-            ZStack {
-                RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(LockPalette.stone950.opacity(0.25), lineWidth: 1)
-                RoundedRectangle(cornerRadius: 27, style: .continuous).strokeBorder(Palette.ink.opacity(0.1), lineWidth: 1).padding(1)
+            if !clear {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(LockPalette.stone950.opacity(0.25), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 27, style: .continuous).strokeBorder(Palette.ink.opacity(0.1), lineWidth: 1).padding(1)
+                }
             }
         }
         .environment(\.colorScheme, .dark)
@@ -254,7 +248,7 @@ struct NowPlayingWidget: View {
         HStack(spacing: 0) {
             Group {
                 if let art = track?.artwork {
-                    Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
+                    Image(nsImage: art).resizable().aspectRatio(contentMode: .fill).grayscale(grayscale ? 1 : 0)
                 } else {
                     LockPalette.purple.opacity(0.1)
                 }
@@ -310,8 +304,15 @@ struct NowPlayingWidget: View {
             control(track?.isPlaying == true ? "pause.fill" : "play.fill", track?.isPlaying == true ? "Pause" : "Play", size: 27, action: commands.togglePlay)
             control("forward.fill", "Next", size: 21, action: commands.next)
             // Output indicator only: nothing can open an output picker on the Lock Screen.
-            glyph("laptopcomputer", size: 19, dim: true).accessibilityLabel("Output: this Mac")
+            glyph(outputSymbol, size: 19, dim: true).accessibilityLabel("Output: \(output.name)")
         }
+    }
+
+    /// The HUD's device glyph (AirPods, headphones, AirPlay, display…), else this Mac or a speaker.
+    private var outputSymbol: String {
+        if let symbol = output.symbol { return symbol }
+        if output.transport != kAudioDeviceTransportTypeBuiltIn { return "hifispeaker" }
+        return output.name.contains("MacBook") ? "laptopcomputer" : "desktopcomputer"
     }
 
     private func control(_ symbol: String, _ label: String, size: CGFloat, dim: Bool = false, action: @escaping () -> Void) -> some View {
@@ -327,14 +328,24 @@ struct NowPlayingWidget: View {
             .frame(width: 48, height: 46)
     }
 
-    private func volumeRow(_ volume: Binding<Double>) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "speaker.fill")
+    /// Speaker button (mute), level bar (dimmed while muted; dragging unmutes, like the volume keys).
+    private func volumeRow(_ volume: LockVolume) -> some View {
+        let muted = volume.muted.wrappedValue
+        return HStack(spacing: 10) {
+            Button { volume.muted.wrappedValue.toggle() } label: {
+                Image(systemName: muted ? "speaker.slash.fill" : "speaker.fill").frame(width: 16).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(muted ? "Unmute" : "Mute")
             GeometryReader { geo in
-                LevelBar(value: volume.wrappedValue, tint: LockPalette.purple.opacity(0.85))
+                LevelBar(value: volume.level.wrappedValue, tint: LockPalette.purple.opacity(0.85))
+                    .opacity(muted ? 0.35 : 1)
                     .frame(maxHeight: .infinity)
                     .contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 0).onChanged { volume.wrappedValue = Double($0.location.x / geo.size.width) })
+                    .gesture(DragGesture(minimumDistance: 0).onChanged {
+                        volume.level.wrappedValue = Double($0.location.x / geo.size.width)
+                        if volume.muted.wrappedValue { volume.muted.wrappedValue = false }
+                    })
             }
             .frame(height: 12)
             Image(systemName: "speaker.wave.3.fill")
@@ -359,12 +370,14 @@ struct NowPlayingWidget: View {
         case .artwork:
             ZStack {
                 if let art = track?.artwork {
-                    Image(nsImage: art).resizable().aspectRatio(contentMode: .fill).blur(radius: 26).saturation(1.3)
+                    Image(nsImage: art).resizable().aspectRatio(contentMode: .fill).blur(radius: 26).saturation(grayscale ? 0 : 1.3)
                 } else {
                     LockPalette.stone900
                 }
                 Color.black.opacity(0.38)
             }
+        case .clear:
+            Color.clear
         }
     }
 }
@@ -463,7 +476,7 @@ struct LockScreenBand: View {
     var data: LockScreenData
     var options: LockScreenOptions
     var showsNowPlaying: Bool
-    var volume: Binding<Double>?
+    var volume: LockVolume?
     var commands: MediaCommands
     var now = Date()
 
@@ -474,7 +487,9 @@ struct LockScreenBand: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 6)
                 if showsNowPlaying {
-                    NowPlayingWidget(track: data.track, style: options.style, volume: volume, commands: commands)
+                    NowPlayingWidget(
+                        track: data.track, style: options.style, grayscale: options.grayscaleArtwork, output: data.output, volume: volume, commands: commands
+                    )
                         .position(x: geo.size.width / 2, y: geo.size.height * 0.66 + options.offset)
                         .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
@@ -497,7 +512,12 @@ struct LiveLockScreen: View {
             LockScreenBand(
                 data: data, options: options,
                 showsNowPlaying: preview ? options.showNowPlaying && data.track != nil : NowPlayingActivity.shared.shows(data.track, at: context.date),
-                volume: options.showVolume ? Binding(get: { SystemVolume.level }, set: { SystemVolume.level = $0 }) : nil,
+                volume: options.showVolume
+                    ? LockVolume(
+                        level: Binding(get: { SystemAudio.volume() ?? 0 }, set: { SystemAudio.setVolume($0) }),
+                        muted: Binding(get: { SystemAudio.isMuted() }, set: { SystemAudio.setMuted($0) })
+                    )
+                    : nil,
                 commands: NowPlayingState.shared.commands, now: context.date
             )
         }

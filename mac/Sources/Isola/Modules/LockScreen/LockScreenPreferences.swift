@@ -6,13 +6,14 @@ private func load<T>(_ key: String, _ fallback: T) -> T { store.object(forKey: "
 private func save(_ key: String, _ value: Any) { store.set(value, forKey: "lockscreen.\(key)") }
 
 enum NowPlayingWidgetStyle: String, CaseIterable, Identifiable {
-    case glass, dark, artwork
+    case glass, dark, artwork, clear
     var id: String { rawValue }
     var title: String {
         switch self {
         case .glass: "Glass"
         case .dark: "Dark"
         case .artwork: "Artwork"
+        case .clear: "Clear"
         }
     }
 }
