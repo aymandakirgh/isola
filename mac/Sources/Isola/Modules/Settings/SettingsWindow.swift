@@ -193,11 +193,17 @@ struct GeneralPage: View {
                     .disabled(prefs.widthTweak == 0 && prefs.heightTweak == 0)
                 }
             }
-            Section("Hide the island") {
+            Section {
                 Toggle("In fullscreen apps", isOn: $prefs.hideInFullscreen)
                 Toggle("While gaming", isOn: $prefs.hideWhileGaming)
                 Toggle("In Mission Control", isOn: $prefs.hideInMissionControl)
                 Toggle("From screenshots and recordings", isOn: $prefs.hideFromScreenCapture)
+            } header: {
+                Text("Hide the island")
+            } footer: {
+                Text("A fullscreen app hides the island only on its own display; Mission Control hides it everywhere.")
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Section("Appearance") {
                 Picker("Outline", selection: $prefs.outline) {

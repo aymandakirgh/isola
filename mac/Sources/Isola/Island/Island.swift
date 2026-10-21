@@ -14,8 +14,8 @@ final class Island {
     private(set) var hovering = false
     private(set) var pressed = false
     private(set) var activityIndex = 0
-    /// Hidden while a fullscreen app/game or Mission Control is up (see Fullscreen.swift).
-    var suppressed = false
+    /// Displays whose island is hidden for a fullscreen app/game or Mission Control (see Fullscreen.swift).
+    var suppressed: Set<CGDirectDisplayID> = []
 
     @ObservationIgnored private var transientTimer: Timer?
     @ObservationIgnored private var peekTimer: Timer?
@@ -207,6 +207,6 @@ final class Island {
 
     /// Notchless displays with no simulated notch hide the idle pill entirely.
     func visible(in g: NotchGeometry) -> Bool {
-        !suppressed && !(isIdle && !g.hasNotch && !g.attached && !Preferences.shared.showIdlePill)
+        !suppressed.contains(g.displayID) && !(isIdle && !g.hasNotch && !g.attached && !Preferences.shared.showIdlePill)
     }
 }
