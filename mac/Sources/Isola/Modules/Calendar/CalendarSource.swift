@@ -6,7 +6,7 @@ import EventKit
 @MainActor
 final class CalendarSource {
     static let shared = CalendarSource()
-    let store = EKEventStore()
+    private var store = EKEventStore()
     private var ticker: Timer?
     private var announced: String?
     private var leaveNotified: Set<String> = []
@@ -18,9 +18,19 @@ final class CalendarSource {
         for name in [Notification.Name.EKEventStoreChanged, .NSCalendarDayChanged] {
             nc.addObserver(forName: name, object: nil, queue: .main) { _ in MainActor.assumeIsolated { CalendarSource.shared.reload() } }
         }
-        ticker = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
-            MainActor.assumeIsolated { CalendarSource.shared.evaluate() }
+        nc.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { CalendarSource.shared.tick() }
         }
+        ticker = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+            MainActor.assumeIsolated { CalendarSource.shared.tick() }
+        }
+        reload()
+    }
+
+    /// Access can be granted elsewhere (onboarding, System Settings): reload when it flips.
+    private func tick() {
+        guard authorized != CalendarState.shared.authorized else { return evaluate() }
+        store = EKEventStore()  // a store created before access was granted can stay empty
         reload()
     }
 
