@@ -420,7 +420,7 @@ struct MediaSettingsView: View {
             }
             Section("Source") {
                 LabeledContent("Now playing", value: sourceDescription)
-                Text("Music and Spotify are read with AppleScript when macOS withholds system now-playing info; the first use asks for Automation access.")
+                Text("Music and Spotify are read with AppleScript only when macOS withholds system now-playing info and Automation access is already granted.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

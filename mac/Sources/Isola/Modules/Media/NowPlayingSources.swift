@@ -31,6 +31,7 @@ final class NowPlayingSources {
     private(set) var source: Source = .none
     private let remote = MediaRemote()
     private var lastScriptPoll = Date.distantPast
+    private var scriptPolling = false
 
     func start() {
         remote.register()
@@ -66,17 +67,27 @@ final class NowPlayingSources {
             source = .bridge
             return MediaController.shared.apply(bridged)
         }
-        // Nothing playing, or no helper. Ask the scriptable players.
-        guard Date().timeIntervalSince(lastScriptPoll) > 0.8 else { return }
+        // Nothing playing, or no helper. Ask the scriptable players, off the main thread and only
+        // those Automation already allows: an idle Music or Spotify must not stall the UI or prompt.
+        let interval: TimeInterval = if case .script = source { 0.8 } else { 3 }
+        guard !scriptPolling, Date().timeIntervalSince(lastScriptPoll) > interval else { return }
         lastScriptPoll = Date()
-        for player in ScriptPlayer.allCases where player.isRunning {
-            if let s = player.snapshot() {
-                source = .script(player)
-                return MediaController.shared.apply(s)
-            }
+        scriptPolling = true
+        Scripting.queue.async {
+            let found = ScriptPlayer.allCases.lazy
+                .filter { $0.isRunning && Scripting.consent($0.bundleID) == noErr }
+                .compactMap { player in player.snapshot().map { (player, $0) } }
+                .first
+            DispatchQueue.main.async { MainActor.assumeIsolated { NowPlayingSources.shared.scripted(found) } }
         }
-        source = .none
-        MediaController.shared.apply(nil)
+    }
+
+    private func scripted(_ found: (ScriptPlayer, NowPlayingSnapshot)?) {
+        scriptPolling = false
+        // The helper may have spoken while the script ran; it wins.
+        guard !SimulatedPlayer.shared.active, MediaRemoteBridge.shared.latest == nil else { return }
+        source = found.map { .script($0.0) } ?? .none
+        MediaController.shared.apply(found?.1)
     }
 
     private func installCommands() {
@@ -224,28 +235,43 @@ final class MediaRemote {
     }
 }
 
-// MARK: - AppleScript fallback (Music, Spotify)
+// MARK: - AppleScript (Music, Spotify)
 
-enum ScriptPlayer: CaseIterable {
-    case music, spotify
-
-    var bundleID: String { self == .music ? "com.apple.Music" : "com.spotify.client" }
-    var isRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty }
-
-    private static let separator = "␟"
+/// All AppleScript runs on one serial queue, off the main thread: an Apple Event can take
+/// seconds, and the first one to an app may wait on the Automation prompt.
+enum Scripting {
+    static let queue = DispatchQueue(label: "app.isola.applescript", qos: .userInitiated)
+    static let field = "␟"
     private static var scripts: [String: NSAppleScript] = [:]
-    private static var artworkCache: [String: NSImage] = [:]
 
+    /// Call on `queue`.
     @discardableResult
-    private static func run(_ source: String) -> NSAppleEventDescriptor? {
+    static func run(_ source: String) -> NSAppleEventDescriptor? {
         let script = scripts[source] ?? NSAppleScript(source: source)
         scripts[source] = script
         var error: NSDictionary?
         return script?.executeAndReturnError(&error)
     }
 
+    /// Automation consent for an app, never prompting: noErr allowed, errAEEventNotPermitted denied,
+    /// errAEEventWouldRequireUserConsent not asked yet, procNotFound not running. May block: call on `queue`.
+    static func consent(_ bundleID: String) -> OSStatus {
+        let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
+        return AEDeterminePermissionToAutomateTarget(target.aeDesc, AEEventClass(typeWildCard), AEEventID(typeWildCard), false)
+    }
+}
+
+/// Reading Music/Spotify when MediaRemote says nothing. Every method runs scripts: call on `Scripting.queue`.
+enum ScriptPlayer: CaseIterable {
+    case music, spotify
+
+    var bundleID: String { self == .music ? "com.apple.Music" : "com.spotify.client" }
+    var isRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty }
+
+    private static var artworkCache: [String: NSImage] = [:]
+
     private var statusScript: String {
-        let s = Self.separator
+        let s = Scripting.field
         switch self {
         case .music:
             return """
@@ -270,8 +296,8 @@ enum ScriptPlayer: CaseIterable {
 
     /// Only call while the app runs: `tell` would otherwise launch it.
     func snapshot() -> NowPlayingSnapshot? {
-        guard isRunning, let out = Self.run(statusScript)?.stringValue else { return nil }
-        let f = out.components(separatedBy: Self.separator)
+        guard isRunning, let out = Scripting.run(statusScript)?.stringValue else { return nil }
+        let f = out.components(separatedBy: Scripting.field)
         guard f.count >= 9 else { return nil }
         func number(_ text: String) -> Double { Double(text.replacingOccurrences(of: ",", with: ".")) ?? 0 }
         var s = NowPlayingSnapshot()
@@ -289,7 +315,7 @@ enum ScriptPlayer: CaseIterable {
             s.repeatMode = f[7] == "one" ? 1 : f[7] == "all" ? 2 : 0
             if let cached = Self.artworkCache[f[8]] {
                 s.artwork = cached
-            } else if let data = Self.run("tell application id \"com.apple.Music\" to get raw data of artwork 1 of current track")?.data,
+            } else if let data = Scripting.run("tell application id \"com.apple.Music\" to get raw data of artwork 1 of current track")?.data,
                       let image = NSImage(data: data) {
                 Self.artworkCache = [f[8]: image]
                 s.artwork = image
@@ -313,16 +339,19 @@ enum ScriptPlayer: CaseIterable {
     private static func fetchArtwork(_ url: URL, key: String) {
         URLSession.shared.dataTask(with: url) { data, _, _ in
             guard let data, let image = NSImage(data: data) else { return }
-            DispatchQueue.main.async {
+            Scripting.queue.async {
                 artworkCache = [key: image]
-                MainActor.assumeIsolated { NowPlayingSources.shared.poll() }
+                DispatchQueue.main.async { MainActor.assumeIsolated { NowPlayingSources.shared.poll() } }
             }
         }.resume()
     }
 
+    /// A control the user pressed: runs even before Automation was granted (that is when macOS asks).
     func perform(_ command: String) {
-        guard isRunning else { return }
-        Self.run("tell application id \"\(bundleID)\" to \(command)")
+        Scripting.queue.async {
+            guard isRunning else { return }
+            Scripting.run("tell application id \"\(bundleID)\" to \(command)")
+        }
     }
 
     func toggleShuffle() {
