@@ -185,11 +185,20 @@ extension View {
 struct GeneralPage: View {
     @Bindable var nav: SettingsNav
     @Bindable var prefs = Preferences.shared
+    @Bindable var sync = SettingsSync.shared
 
     var body: some View {
         Form {
             Section {
                 Toggle("Launch at login", isOn: $nav.launchAtLogin)
+                Toggle(isOn: $sync.enabled) {
+                    Text("Sync settings with iCloud Drive")
+                    if sync.enabled { Text(sync.status) }
+                }
+            } footer: {
+                Text("Turning it on applies the settings already in iCloud Drive, if there are any. The license, display choice, fine tuning, hidden calendars, dismissed events and live waveform stay on this Mac.")
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Section("Display") {
                 Picker("Show the island on", selection: $prefs.preferredDisplay) {

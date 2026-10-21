@@ -88,7 +88,7 @@ enum CoreDemo {
         // Mid-spring: the player is still shorter than its content, which blurs into the bottom edge.
         Gallery.island("core-edge-blur", item: music, expanded: true, size: CGSize(width: 420, height: 134))
         // Whole General and Island pages (the settings window crops them).
-        Gallery.add("core-general-settings", size: CGSize(width: 520, height: 1010)) {
+        Gallery.add("core-general-settings", size: CGSize(width: 520, height: 1100)) {
             GeneralPage(nav: SettingsNav()).background(Color(nsColor: .windowBackgroundColor))
         }
         Gallery.add("core-island-settings", size: CGSize(width: 520, height: 640)) {
