@@ -19,6 +19,7 @@
 	<key>NSCalendarsFullAccessUsageDescription</key><string>Isola shows your upcoming events in the island and on the Lock Screen.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key><string>Isola announces when your headphones and other Bluetooth devices connect.</string>
 	<key>NSLocationWhenInUseUsageDescription</key><string>Isola uses your location for the weather widget.</string>
+	<key>NSAudioCaptureUsageDescription</key><string>Isola draws the live waveform from the audio that's playing. Nothing is recorded or stored.</string>
 	<key>NSFocusStatusUsageDescription</key><string>Isola shows your Focus mode in the island.</string>
 </dict>
 </plist>

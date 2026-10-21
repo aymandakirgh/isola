@@ -44,6 +44,7 @@ enum CoreDemo {
     }
 
     static func gallery() {
+        IslandWindows.selfCheck()
         Gallery.island("core-idle-notch", item: nil, geometry: .notchPreview)
         Gallery.island("core-activity-pill", item: item())
         Gallery.island("core-activity-notch", item: item(), geometry: .notchPreview)

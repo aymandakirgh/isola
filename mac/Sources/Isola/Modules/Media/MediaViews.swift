@@ -93,10 +93,13 @@ struct Spectrogram: View {
         let gradient = LinearGradient(colors: state.colors.map { Color(nsColor: $0) }, startPoint: .top, endPoint: .bottom)
         TimelineView(.animation(minimumInterval: 1 / 30, paused: !state.isPlaying)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
+            let levels = AudioLevels.shared
+            let live = MediaPreferences.shared.liveWaveform && levels.live
             HStack(spacing: 1.5) {
                 ForEach(0..<4, id: \.self) { i in
                     let phase = (t / Self.periods[i]).truncatingRemainder(dividingBy: 1)
-                    let height = state.isPlaying ? 3 + 9 * (1 - cos(phase * 2 * .pi)) / 2 : 2
+                    let level = live ? Double(levels.bands[i]) : (1 - cos(phase * 2 * .pi)) / 2
+                    let height = state.isPlaying ? 3 + 9 * level : 2
                     RoundedRectangle(cornerRadius: 1).fill(gradient).frame(width: 2, height: height)
                 }
             }
@@ -397,6 +400,11 @@ struct MediaSettingsView: View {
         Form {
             Section("Island") {
                 Toggle("Spectrogram", isOn: $prefs.spectrogram)
+                Toggle(isOn: $prefs.liveWaveform) {
+                    Text("Live waveform")
+                    Text("Bars follow the audio that's playing, at about 1% CPU. macOS asks for System Audio Recording access the first time.")
+                }
+                .disabled(!prefs.spectrogram)
                 Toggle("Dim artwork when paused", isOn: $prefs.dimOnPause)
                 Toggle("Grayscale artwork", isOn: $prefs.grayscaleArtwork)
                 Toggle("Hide note symbol", isOn: $prefs.hideNoteSymbol)

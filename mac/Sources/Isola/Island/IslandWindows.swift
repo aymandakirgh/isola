@@ -165,6 +165,25 @@ final class IslandWindows {
         return e
     }
 
+    /// The way the fingers moved, whatever the system scroll direction: natural scrolling
+    /// (`inverted`) reports the content's motion, which matches the fingers. The "natural
+    /// movement" option flips only skip swipes, so content follows the fingers there too.
+    nonisolated static func direction(dx: CGFloat, dy: CGFloat, inverted: Bool, naturalSkip: Bool) -> SwipeDirection {
+        let toFingers: CGFloat = inverted ? 1 : -1
+        let x = dx * toFingers * (naturalSkip ? -1 : 1), y = dy * toFingers
+        return abs(x) > abs(y) ? (x > 0 ? .right : .left) : (y > 0 ? .down : .up)
+    }
+
+    static func selfCheck() {
+        // Natural scrolling on (the macOS default): fingers down → positive deltaY.
+        precondition(direction(dx: 0, dy: 50, inverted: true, naturalSkip: false) == .down, "natural: fingers down")
+        precondition(direction(dx: 0, dy: -50, inverted: false, naturalSkip: false) == .down, "classic: fingers down")
+        precondition(direction(dx: 50, dy: 5, inverted: true, naturalSkip: false) == .right, "natural: fingers right")
+        precondition(direction(dx: -50, dy: 5, inverted: false, naturalSkip: false) == .right, "classic: fingers right")
+        precondition(direction(dx: 50, dy: 5, inverted: true, naturalSkip: true) == .left, "natural movement flips skips")
+        precondition(direction(dx: 5, dy: 50, inverted: true, naturalSkip: true) == .down, "…but not vertical swipes")
+    }
+
     /// Two-finger swipes: accumulate a gesture, fire once per gesture past a threshold.
     private func handleScroll(_ e: NSEvent) {
         if e.phase == .began || (e.phase.isEmpty && e.momentumPhase.isEmpty && !scrollLocked) {
@@ -174,19 +193,14 @@ final class IslandWindows {
             if e.phase == .ended || e.phase == .cancelled { scrollLocked = false }
             return
         }
-        let natural = Preferences.shared.naturalSwipe ? 1.0 : -1.0
-        scrollAccumulator.width += e.scrollingDeltaX * natural
+        scrollAccumulator.width += e.scrollingDeltaX
         scrollAccumulator.height += e.scrollingDeltaY
         let threshold: CGFloat = e.hasPreciseScrollingDeltas ? 40 : 3
         let dx = scrollAccumulator.width, dy = scrollAccumulator.height
         guard max(abs(dx), abs(dy)) > threshold else { return }
         scrollLocked = true
         scrollAccumulator = .zero
-        if abs(dx) > abs(dy) {
-            Island.shared.swipe(dx > 0 ? .right : .left)
-        } else {
-            Island.shared.swipe(dy < 0 ? .down : .up)
-        }
+        Island.shared.swipe(Self.direction(dx: dx, dy: dy, inverted: e.isDirectionInvertedFromDevice, naturalSkip: Preferences.shared.naturalSwipe))
         if e.phase.isEmpty { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self.scrollLocked = false } }
     }
 }
