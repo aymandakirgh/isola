@@ -21,6 +21,29 @@ final class MediaPreferences {
     var idleSeconds: Double = load("media.idleSeconds", 120) { didSet { store.set(idleSeconds, forKey: "media.idleSeconds") } }
     var excludeBrowsers: Bool = load("media.excludeBrowsers", false) { didSet { store.set(excludeBrowsers, forKey: "media.excludeBrowsers"); MediaController.shared.refresh() } }
     var excludeInapt: Bool = load("media.excludeInapt", true) { didSet { store.set(excludeInapt, forKey: "media.excludeInapt"); MediaController.shared.refresh() } }
+    /// The progress bar is painted with the artwork colours.
+    var gradientProgress: Bool = load("media.gradientProgress", false) { didSet { store.set(gradientProgress, forKey: "media.gradientProgress") } }
+    /// The label after the progress bar shows the total duration instead of the time left (tap it to switch).
+    var showTotalTime: Bool = load("media.showTotalTime", false) { didSet { store.set(showTotalTime, forKey: "media.showTotalTime") } }
+
+    /// `isolactl media.pref key=value`.
+    func set(_ key: String, _ value: String) {
+        let on = value == "1" || value == "true"
+        switch key {
+        case "spectrogram": spectrogram = on
+        case "liveWaveform": liveWaveform = on
+        case "grayscaleArtwork": grayscaleArtwork = on
+        case "dimOnPause": dimOnPause = on
+        case "hideNoteSymbol": hideNoteSymbol = on
+        case "hideTitleExtras": hideTitleExtras = on
+        case "idleSeconds": idleSeconds = Double(value) ?? 120
+        case "excludeBrowsers": excludeBrowsers = on
+        case "excludeInapt": excludeInapt = on
+        case "gradientProgress": gradientProgress = on
+        case "showTotalTime": showTotalTime = on
+        default: NSLog("isola: unknown media pref %@", key)
+        }
+    }
 }
 
 /// View-side state that is not part of the track itself.
@@ -214,6 +237,7 @@ enum MediaModule {
             s.seek(to: args["to"].flatMap(Double.init) ?? s.currentElapsed() + (args["by"].flatMap(Double.init) ?? 0))
         }
         Debug.on("media.end") { _ in sim.stop() }
+        Debug.on("media.pref") { args in for (k, v) in args { MediaPreferences.shared.set(k, v) } }
         Debug.on("media.state") { _ in
             let s = NowPlayingState.shared
             Debug.reply("source=\(NowPlayingSources.shared.source) playing=\(s.isPlaying) title=\(s.title)")
@@ -264,6 +288,12 @@ enum MediaModule {
         podcast.sourceBundleID = "com.apple.podcasts"
         Gallery.island("media-peek-podcast", item: MediaActivity.item(state: podcast, ui: ui), peeking: true)
         Gallery.island("media-expanded-podcast", item: MediaActivity.item(state: podcast, ui: ui), expanded: true)
+        Gallery.add("media-progress-gradient", size: CGSize(width: 420, height: 48)) {
+            ProgressScrubber(state: other, gradient: true, totalTime: true)
+                .padding(.horizontal, 22)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+        }
         // Entries named "*settings" are snapshotted through a hosting view by the core gallery.
         Gallery.add("media-settings", size: CGSize(width: 520, height: 560)) {
             MediaSettingsView().background(Color(nsColor: .windowBackgroundColor))

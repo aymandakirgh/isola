@@ -159,8 +159,12 @@ final class ScrubModel: ObservableObject {
     @Published var fraction: Double?
 }
 
-private struct ProgressScrubber: View {
+struct ProgressScrubber: View {
     let state: NowPlayingState
+    /// Fill with the artwork colours instead of ink.
+    var gradient = false
+    /// Total duration after the bar instead of the time left.
+    var totalTime = false
     @StateObject private var scrub = ScrubModel()
 
     static func format(_ t: TimeInterval) -> String {
@@ -183,12 +187,16 @@ private struct ProgressScrubber: View {
                 let duration = state.duration
                 let elapsed = scrub.fraction.map { $0 * duration } ?? state.currentElapsed(at: context.date)
                 let fraction = min(1, max(0, elapsed / duration))
+                // Darker artwork colour at the start, brighter at the playhead.
+                let fill = gradient
+                    ? AnyShapeStyle(LinearGradient(colors: state.colors.reversed().map { Color(nsColor: $0) }, startPoint: .leading, endPoint: .trailing))
+                    : AnyShapeStyle(Palette.ink.opacity(scrub.fraction == nil ? 0.88 : 1))
                 HStack(spacing: 10) {
                     Text(Self.format(elapsed)).frame(width: 34, alignment: .leading)
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
                             Capsule().fill(Palette.ink.opacity(0.2))
-                            Capsule().fill(Palette.ink.opacity(scrub.fraction == nil ? 0.88 : 1))
+                            Capsule().fill(fill)
                                 .frame(width: max(6, geo.size.width * fraction))
                         }
                         .frame(height: scrub.fraction == nil ? 5 : 7)
@@ -205,7 +213,10 @@ private struct ProgressScrubber: View {
                         .animation(.easeOut(duration: 0.15), value: scrub.fraction == nil)
                     }
                     .frame(height: 14)
-                    Text("-" + Self.format(duration - elapsed)).frame(width: 38, alignment: .trailing)
+                    Text(totalTime ? Self.format(duration) : "-" + Self.format(duration - elapsed))
+                        .frame(width: 38, alignment: .trailing)
+                        .contentShape(Rectangle())
+                        .onTapGesture { MediaPreferences.shared.showTotalTime.toggle() }
                 }
                 .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
                 .foregroundStyle(Palette.muted)
@@ -368,7 +379,7 @@ struct ExpandedPlayer: View {
                     SourceAppButton(state: state)
                 }
             }
-            ProgressScrubber(state: state).padding(.top, 14)
+            ProgressScrubber(state: state, gradient: prefs.gradientProgress, totalTime: prefs.showTotalTime).padding(.top, 14)
             // Podcasts skip within the episode (15 s back, 30 s ahead) instead of changing track.
             let podcast = state.isPodcast && state.duration > 0
             HStack(spacing: 0) {
@@ -428,6 +439,13 @@ struct MediaSettingsView: View {
                 Toggle(isOn: $prefs.hideTitleExtras) {
                     Text("Hide title extras")
                     Text("Removes “feat.”, remaster notes and bracketed tags.")
+                }
+            }
+            Section("Player") {
+                Toggle("Gradient progress bar", isOn: $prefs.gradientProgress)
+                Toggle(isOn: $prefs.showTotalTime) {
+                    Text("Show total duration")
+                    Text("Instead of the time left. Clicking the time in the player switches it too.")
                 }
             }
             Section("Activity") {
