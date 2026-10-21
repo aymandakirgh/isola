@@ -18,6 +18,7 @@ for (const name of [
   delete process.env[name];
 const {
   default: api,
+  bindEmail,
   isValidKey,
   memory,
   withKey,
@@ -68,9 +69,11 @@ async function call(
   };
 }
 
+/** A new key; `email` binds it for recovery the way a verified checkout would. */
 async function mint(email?: string): Promise<string> {
-  const { status, body } = await call("demo", email ? { email } : {});
+  const { status, body } = await call("demo", {});
   assert.equal(status, 201);
+  if (email) await bindEmail(email, body.key);
   return body.key;
 }
 
@@ -141,15 +144,18 @@ test("keys check out exactly as in the Mac app", () => {
   assert.ok(isValidKey("ISOLA-DEMO-7Q4K-2M9X"), "the shared demo key");
 });
 
-test("demo mints a new key in the app's format", async () => {
+test("demo mints a new key in the app's format, and binds no e-mail", async () => {
+  const indexes = () => [...memory.keys()].filter((p) => p.startsWith("emails/")).length;
+  const before = indexes();
   const withEmail = await call("demo", { email: " You@Example.com " });
   assert.equal(withEmail.status, 201);
+  assert.equal(indexes(), before, "a demo checkout verifies no address, so it writes no index");
   assert.match(
     withEmail.body.key,
     /^ISOLA-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/,
   );
   assert.ok(isValidKey(withEmail.body.key));
-  assert.equal(withEmail.body.email, "you@example.com");
+  assert.equal(withEmail.body.email, null);
   const without = await call("demo", {});
   assert.equal(without.body.email, null);
   assert.notEqual(without.body.key, withEmail.body.key);
@@ -551,11 +557,9 @@ test("only a plain e-mail address is taken, lower-cased", async () => {
     `${"a".repeat(243)}@example.com`,
   ]) {
     assert.equal((await call("recover", { email })).status, 400, email);
-    assert.equal((await call("demo", { email })).status, 400, email);
+    await assert.rejects(bindEmail(email, "ISOLA-W7UD-A389-NXLG"), email);
   }
-  const ok = await call("demo", { email: " You+Shop@Example.COM " });
-  assert.equal(ok.status, 201);
-  assert.equal(ok.body.email, "you+shop@example.com");
+  await assert.doesNotReject(bindEmail(" You+Shop@Example.COM ", await mint()));
   assert.equal(
     (await call("recover", { email: `${"a".repeat(242)}@example.com` })).status,
     202,
@@ -991,4 +995,25 @@ test("a deployment without a Blob store answers 503 rather than keep keys in mem
     body.error,
     "The license server isn’t set up yet. Please try again later.",
   );
+});
+
+test("one network address has a ceiling before any read, whatever keys and Macs it uses", async () => {
+  // Twelve registered Macs, each well inside its own allowance: only the per-address ceiling can say no.
+  const macs: { key: string; id: string }[] = [];
+  for (let k = 0; k < 4; k++) {
+    const key = await mint();
+    for (const name of ["a", "b", "c"]) {
+      assert.equal((await call("activate", { key, device: mac(`ceiling-${k}${name}`) })).status, 200);
+      macs.push({ key, id: mac(`ceiling-${k}${name}`).id });
+    }
+  }
+  const from = "203.0.113.77";
+  for (let i = 0; i < 600; i++) {
+    const { key, id } = macs[i % macs.length];
+    assert.equal((await call("devices", { key, deviceId: id }, from)).status, 200, `call ${i + 1}`);
+  }
+  const over = await call("devices", { key: macs[0].key, deviceId: macs[0].id }, from);
+  assert.equal(over.status, 503);
+  assert.ok(Number(over.headers.get("retry-after")) > 0);
+  assert.equal((await call("devices", { key: macs[0].key, deviceId: macs[0].id })).status, 200, "another address is unaffected");
 });

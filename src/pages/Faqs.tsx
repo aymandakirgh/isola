@@ -167,11 +167,10 @@ export default function Faqs() {
               symbol={symbol(SHIELD_LOCK_PATH)}
             >
               <p>
-                Only what your license needs: the key, the e-mail address you
-                give at checkout if you give one, and for each activated Mac a
-                random ID, its name and model, and when it was activated and
-                last seen. Your IP address is used briefly, in memory, to
-                rate-limit requests, and we never store it.
+                Only what your license needs: the key, and for each activated
+                Mac a random ID, its name and model, and when it was activated
+                and last seen. Your IP address is kept in memory for up to an
+                hour to rate-limit requests, and never stored.
               </p>
               <p className={DIM}>
                 The{" "}

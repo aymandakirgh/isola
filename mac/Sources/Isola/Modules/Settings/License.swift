@@ -74,6 +74,8 @@ final class License {
     @ObservationIgnored private var previewing = false
     /// Bumped by every request and every local change: the answer to an older one is dropped.
     @ObservationIgnored private var generation = 0
+    /// The pending deactivations being sent right now, so an activation can wait for them.
+    @ObservationIgnored private var settling: Task<Void, Never>?
     @ObservationIgnored private var syncing = false
     @ObservationIgnored private var lastSync = Date.distantPast
     /// Deactivations of this Mac the server hasn't confirmed (deactivated while it couldn't be
@@ -148,6 +150,9 @@ final class License {
 
     /// Activation, and the sync of a Mac the server doesn't have yet.
     private func register(_ candidate: String) async {
+        // A deactivation of this Mac already on its way would land after this activation and take
+        // the Mac off the key again: let it finish first.
+        await settling?.value
         let device = ["id": thisMac.id, "name": thisMac.name, "model": thisMac.model]
         guard let reply = await ask("activate", ["key": candidate, "device": device]) else { return }
         let current = key == candidate
@@ -246,13 +251,19 @@ final class License {
     /// Retries the deactivations the server hasn't confirmed. A definite answer settles one (gone
     /// now, or not there to begin with); anything else keeps it for the next sync.
     private func settlePending() async {
-        for item in pending {
-            let body = Self.json(["key": item.key, "deviceId": item.id, "target": item.id])
-            switch await Self.post(Self.api.appendingPathComponent("deactivate"), body) {
-            case .devices, .refused: drop(item)
-            case .full, .order, .failed: break
+        if let settling { return await settling.value }
+        let task = Task {
+            for item in pending {
+                let body = Self.json(["key": item.key, "deviceId": item.id, "target": item.id])
+                switch await Self.post(Self.api.appendingPathComponent("deactivate"), body) {
+                case .devices, .refused: drop(item)
+                case .full, .order, .failed: break
+                }
             }
         }
+        settling = task
+        await task.value
+        settling = nil
     }
 
     private func drop(_ item: Pending) {
@@ -777,7 +788,7 @@ struct LicensePage: View {
                             .background(Capsule().fill(Color.accentColor.opacity(0.2)))
                     }
                 }
-                Text(mac.stale(at: license.now)
+                Text(mac.id != license.thisMac.id && mac.stale(at: license.now)
                     ? "\(mac.model) · last seen \((mac.lastSeen ?? mac.activated).formatted(.relative(presentation: .named)))"
                     : "\(mac.model) · since \(mac.activated.formatted(date: .abbreviated, time: .omitted))")
                     .font(.caption)

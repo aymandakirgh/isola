@@ -261,6 +261,8 @@ async function changeLicense(
   deviceId: string,
   change: (license: License) => License | undefined,
 ) {
+  // Before any read: one network address can't buy unlimited storage reads with ids or keys of its own.
+  limit(`ip:${clientIp(request)}`, CALLS_PER_IP);
   let counted = false;
   const license = await update<License>(licensePath(key), (current) => {
     if (!counted) limitMac(request, key, current, deviceId);
@@ -325,7 +327,8 @@ export function withKey(index: EmailIndex | null, key: string) {
 // on /api/license/ for the per-address caps (https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting)
 // and @vercel/firewall's checkRateLimit with the key (or key and Mac) as rateLimitKey for the others.
 // The WAF's own 429 is safe for the Mac app, which takes nothing but this server's verdicts. Telling
-// a Mac on the key from anyone else takes reading the licence, so a throttled caller still costs a read.
+// a Mac on the key from anyone else takes reading the licence; the per-address ceiling comes first,
+// so past it a caller costs no read at all.
 
 const hits = new Map<string, { count: number; reset: number }>();
 /** activate, devices and deactivate, an hour: per Mac on the key; for any other caller, per network
@@ -333,12 +336,21 @@ const hits = new Map<string, { count: number; reset: number }>();
 const MAC_CALLS_PER_MAC = 60;
 const MAC_CALLS_PER_IP = 120;
 const MAC_CALLS_PER_KEY = 60;
+/** Every caller of activate, devices and deactivate, before the licence is read: generous enough
+ *  for a household of Macs behind one address, low enough to bound reads per source. */
+const CALLS_PER_IP = 600;
+
+let swept = 0;
 
 /** 0 while `bucket` is within `max` an hour, else the seconds until it may go again. */
 function throttled(bucket: string, max: number) {
   const time = Date.now();
-  if (hits.size > 10_000)
+  // Expired buckets go within a minute, so an address stays in memory for an hour at most (the
+  // privacy page says so).
+  if (time - swept > 60_000) {
+    swept = time;
     for (const [k, v] of hits) if (v.reset <= time) hits.delete(k);
+  }
   const hit = hits.get(bucket);
   if (!hit || hit.reset <= time) {
     hits.set(bucket, { count: 1, reset: time + HOUR });
@@ -434,9 +446,10 @@ function deviceOf(value: unknown) {
 
 // MARK: Routes
 
-async function demo(body: Body, request: Request) {
-  const email =
-    body.email == null || body.email === "" ? null : emailOf(body.email);
+/** The demo checkout verifies no address, so it binds none (an `email` in the body is ignored):
+ *  otherwise a script could point recovery mail at anyone. A checkout that confirms the address
+ *  calls bindEmail. */
+async function demo(_body: Body, request: Request) {
   limit(`demo:${clientIp(request)}`, 5);
   const key = mintKey();
   await save(
@@ -444,9 +457,12 @@ async function demo(body: Body, request: Request) {
     { key, created: now(), devices: [] } satisfies License,
     null,
   );
-  if (email)
-    await update<EmailIndex>(emailPath(email), (index) => withKey(index, key));
-  return json({ key, email }, 201);
+  return json({ key, email: null }, 201);
+}
+
+/** Adds `key` to the recovery index of `email`, for a checkout that has verified the address. */
+export async function bindEmail(email: string, key: string) {
+  await update<EmailIndex>(emailPath(emailOf(email)), (index) => withKey(index, key));
 }
 
 async function activate(body: Body, request: Request) {

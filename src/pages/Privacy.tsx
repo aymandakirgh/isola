@@ -49,31 +49,30 @@ export default function Privacy() {
             </span>
           </p>
           <Section title="What we keep">
-            Your license key, and the e-mail address you give at checkout if you
-            give one. For each Mac you activate: a random ID the app makes for
-            it, the Mac’s name and model, and when it was activated and last
-            seen.
+            Your license key. For each Mac you activate: a random ID the app
+            makes for it, the Mac’s name and model, and when it was activated
+            and last seen. The demo checkout on this site asks for no e-mail
+            address.
           </Section>
           <Section title="Why">
-            To hold each license to three Macs, to list them in Settings ›
-            License so you can free a slot, and to send your key again if you
-            lose it. Nothing else: no analytics, no ads, no tracking.
+            To hold each license to three Macs, and to list them in Settings ›
+            License so you can free a slot. Nothing else: no analytics, no ads,
+            no tracking.
           </Section>
           <Section title="Where">
             With Vercel, which hosts this site and keeps licenses in private
             storage (Vercel Blob). Like any host, it sees your IP address with
             each request, {BRAND}’s daily checks included; the license server
-            uses it briefly, in memory, to rate-limit requests, and we never
-            store it. Once license e-mails are switched on, they go out through
+            keeps it in memory for up to an hour to rate-limit requests, and
+            never stores it. Once license e-mails are switched on, they go out through
             Resend. The demo on this site plays its songs straight from Apple
             Music, and in the app, weather and Spotify features talk to those
             services directly. Everything else stays on your Mac, or in your own
             iCloud Drive if you sync settings.
           </Section>
           <Section title="How long">
-            A Mac’s details stay until that Mac is deactivated. Your key and
-            e-mail address stay as long as the license exists, or until you ask
-            us to delete them.
+            A Mac’s details stay until that Mac is deactivated. Your key stays
+            as long as the license exists, or until you ask us to delete it.
           </Section>
           <Section title="Your rights">
             You can ask for a copy of what we hold about you, a correction or
