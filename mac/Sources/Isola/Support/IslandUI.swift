@@ -134,9 +134,10 @@ final class MarqueeModel: ObservableObject {
 
 extension View {
     /// Progressive blur with public SwiftUI only: the view under one gradient mask and a blurred
-    /// copy under another, so content dissolves into an edge instead of being cut by it.
+    /// copy under another, so content dissolves into an edge instead of being cut by it. The copy
+    /// takes no clicks and is hidden from VoiceOver.
     func progressiveBlur<Sharp: View, Blurred: View>(radius: CGFloat, sharp: Sharp, blurred: Blurred) -> some View {
-        mask(sharp).overlay(blur(radius: radius).mask(blurred).allowsHitTesting(false))
+        mask(sharp).overlay(blur(radius: radius).mask(blurred).allowsHitTesting(false).accessibilityHidden(true))
     }
 }
 
