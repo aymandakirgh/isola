@@ -140,7 +140,7 @@ enum MediaActivity {
             MediaTrailing(state: state).padding(.trailing, 9)
         }
         .peek(onHover: true) { MediaPeek(state: state) }
-        .expanded(size: CGSize(width: 420, height: 186)) { ExpandedPlayer(state: state, ui: ui) }
+        .expanded(size: CGSize(width: 420, height: 162)) { ExpandedPlayer(state: state, ui: ui) }
         .onOptionTap { state.commands.togglePlay() }
         .onSwipe { direction in
             switch direction {
