@@ -27,7 +27,7 @@ struct NowPlayingSnapshot {
 final class NowPlayingSources {
     static let shared = NowPlayingSources()
 
-    enum Source { case none, mediaRemote, script(ScriptPlayer), simulated }
+    enum Source { case none, mediaRemote, bridge, script(ScriptPlayer), simulated }
     private(set) var source: Source = .none
     private let remote = MediaRemote()
     private var lastScriptPoll = Date.distantPast
@@ -42,6 +42,8 @@ final class NowPlayingSources {
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             MainActor.assumeIsolated { NowPlayingSources.shared.poll() }
         }
+        MediaRemoteBridge.shared.onUpdate = { NowPlayingSources.shared.poll() }
+        MediaRemoteBridge.shared.start()
         installCommands()
         poll()
     }
@@ -59,7 +61,12 @@ final class NowPlayingSources {
             source = .mediaRemote
             return MediaController.shared.apply(snapshot)
         }
-        // MediaRemote is silent: nothing playing, or blocked. Ask the scriptable players.
+        // Direct MediaRemote is silent (blocked on macOS 15.4+): use the perl-hosted helper.
+        if let bridged = MediaRemoteBridge.shared.latest {
+            source = .bridge
+            return MediaController.shared.apply(bridged)
+        }
+        // Nothing playing, or no helper. Ask the scriptable players.
         guard Date().timeIntervalSince(lastScriptPoll) > 0.8 else { return }
         lastScriptPoll = Date()
         for player in ScriptPlayer.allCases where player.isRunning {
@@ -80,6 +87,7 @@ final class NowPlayingSources {
                     switch sources.source {
                     case .simulated: sim(SimulatedPlayer.shared)
                     case .mediaRemote: if let command { sources.remote.send(command) }
+                    case .bridge: if let command { MediaRemoteBridge.shared.send("cmd \(command.rawValue)") }
                     case .script(let player): script?(player)
                     case .none: break
                     }
@@ -99,6 +107,7 @@ final class NowPlayingSources {
                 switch sources.source {
                 case .simulated: SimulatedPlayer.shared.seek(time)
                 case .mediaRemote: sources.remote.setElapsed(time)
+                case .bridge: MediaRemoteBridge.shared.send("seek \(time)")
                 case .script(let player): player.perform("set player position to \(time)")
                 case .none: break
                 }
@@ -110,6 +119,7 @@ final class NowPlayingSources {
                 switch sources.source {
                 case .simulated: SimulatedPlayer.shared.setRate(rate)
                 case .mediaRemote: sources.remote.send(.changePlaybackRate, options: ["kMRMediaRemoteOptionPlaybackRate": rate])
+                case .bridge: MediaRemoteBridge.shared.send("rate \(rate)")
                 default: break  // Music/Spotify scripting has no rate control
                 }
             }

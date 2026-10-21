@@ -15,6 +15,9 @@ cp "$BIN/isolactl" build/isolactl
 cp -R Resources/Sounds Resources/AppIcon.icns "$APP/Contents/Resources/"
 mkdir -p "$APP/Contents/Resources/Media"
 cp ../public/videos/earbuds.mp4 "$APP/Contents/Resources/Media/"
+# Now Playing helper hosted by /usr/bin/perl (see Helpers/MediaRemoteHelper.m).
+clang -dynamiclib -fobjc-arc -O2 -framework Foundation Helpers/MediaRemoteHelper.m -o "$APP/Contents/Resources/MediaRemoteHelper.dylib"
+cp Helpers/mediaremote.pl "$APP/Contents/Resources/"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" Resources/Info.plist > "$APP/Contents/Info.plist"
 codesign --force --deep --sign - "$APP"
 if [[ "${DMG:-1}" == 1 ]]; then

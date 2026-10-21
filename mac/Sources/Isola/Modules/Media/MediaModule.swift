@@ -175,6 +175,10 @@ enum MediaModule {
         Debug.on("media.next") { _ in NowPlayingState.shared.commands.next() }
         Debug.on("media.previous") { _ in NowPlayingState.shared.commands.previous() }
         Debug.on("media.end") { _ in sim.stop() }
+        Debug.on("media.state") { _ in
+            let s = NowPlayingState.shared
+            Debug.reply("source=\(NowPlayingSources.shared.source) playing=\(s.isPlaying) title=\(s.title)")
+        }
     }
 
     static func gallery() {

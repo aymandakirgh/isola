@@ -386,6 +386,7 @@ struct MediaSettingsView: View {
     private var sourceDescription: String {
         switch NowPlayingSources.shared.source {
         case .mediaRemote: "System (MediaRemote)"
+        case .bridge: "System (MediaRemote helper)"
         case .script(let player): player == .music ? "Music (AppleScript)" : "Spotify (AppleScript)"
         case .simulated: "Simulated"
         case .none: "Nothing playing"
