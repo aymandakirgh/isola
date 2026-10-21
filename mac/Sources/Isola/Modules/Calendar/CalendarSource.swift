@@ -52,30 +52,36 @@ final class CalendarSource {
         state.authorized = authorized
         let cal = Calendar.current
         let day = cal.startOfDay(for: Date())
-        var today = model.debugEvents
-        var counts: [Date: Int] = [:]
-        for e in model.debugEvents { counts[cal.startOfDay(for: e.start), default: 0] += 1 }
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: day)!
+        let week = cal.dateInterval(of: .weekOfYear, for: day) ?? DateInterval(start: day, end: tomorrow)
+        var events = model.debugEvents
 
-        if authorized, let week = cal.dateInterval(of: .weekOfYear, for: Date()) {
+        if authorized {
             let calendars = store.calendars(for: .event).filter {
                 !prefs.excludedCalendars.contains($0.calendarIdentifier) && !(prefs.excludeSubscribed && $0.type == .subscription)
             }
             let predicate = store.predicateForEvents(withStart: week.start, end: week.end, calendars: calendars)
-            let events = calendars.isEmpty ? [] : store.events(matching: predicate).filter { prefs.showDeclined || !Self.declined($0) }
-            for e in events {
-                counts[cal.startOfDay(for: e.startDate), default: 0] += 1
-                if e.endDate > day, e.startDate < day.addingTimeInterval(86400) { today.append(Self.map(e)) }
-            }
+            let found = calendars.isEmpty ? [] : store.events(matching: predicate).filter { prefs.showDeclined || !Self.declined($0) }
+            events += found.map(Self.map)
         }
-        state.today = today.sorted { $0.start < $1.start }
-        model.weekCounts = counts
+        // Multi-day events are listed on every day they cover, and dotted on each of them.
+        state.today = events.filter { $0.end > day && $0.start < tomorrow }.sorted { $0.start < $1.start }
+        model.weekCounts = Self.counts(events, in: week)
         evaluate()
+    }
+
+    /// Start of day → events on it, for the week strip.
+    static func counts(_ events: [CalendarEvent], in week: DateInterval) -> [Date: Int] {
+        var counts: [Date: Int] = [:]
+        for e in events { for day in e.days(in: week) { counts[day, default: 0] += 1 } }
+        return counts
     }
 
     /// Runs every 30 s: show the next event's live activity, fire time-to-leave alerts.
     func evaluate() {
         let prefs = CalendarPreferences.shared
         let now = Date()
+        // Keyed to the real start: the later days of a multi-day event have none to count down to.
         let upcoming = CalendarState.shared.today.first {
             !$0.isAllDay && !prefs.dismissed.contains($0.id)
                 && $0.start > now.addingTimeInterval(-5 * 60)  // keep "Now" for 5 min after it starts
@@ -134,5 +140,41 @@ final class CalendarSource {
             id: id, title: e.title ?? "Untitled", start: e.startDate, end: e.endDate,
             calendarColor: e.calendar.color ?? .systemBlue, location: location?.isEmpty == true ? nil : location, isAllDay: e.isAllDay
         )
+    }
+
+    /// Runs with the gallery (`Isola --gallery`): multi-day splitting.
+    static func selfCheck() {
+        let cal = Calendar.current
+        let day = cal.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
+        func at(_ days: Int, _ hours: Double) -> Date { cal.date(byAdding: .day, value: days, to: day)!.addingTimeInterval(hours * 3600) }
+        func event(_ start: Date, _ end: Date, allDay: Bool = false) -> CalendarEvent {
+            CalendarEvent(id: "check", title: "Check", start: start, end: end, calendarColor: .systemBlue, isAllDay: allDay)
+        }
+        let trip = event(at(0, 22), at(2, 7))
+        precondition(trip.days() == [at(0, 0), at(1, 0), at(2, 0)])
+        precondition(event(at(0, 10), at(1, 0)).days() == [at(0, 0)], "an end at midnight stays on its day")
+        precondition(event(at(0, 0), at(1, 0), allDay: true).days() == [at(0, 0)])
+        precondition(event(at(0, 9), at(0, 9)).days() == [at(0, 0)], "a zero-length event still has a day")
+        precondition(counts([trip], in: DateInterval(start: at(1, 0), end: at(8, 0))) == [at(1, 0): 1, at(2, 0): 1])
+        precondition(CalendarText.span(trip, on: at(0, 23))?.hasPrefix("Day 1 of 3 · from ") == true)
+        precondition(CalendarText.span(trip, on: at(1, 12)) == "Day 2 of 3")
+        precondition(CalendarText.span(trip, on: at(2, 3))?.hasPrefix("Day 3 of 3 · until ") == true)
+        precondition(CalendarText.span(event(at(0, 10), at(0, 11)), on: at(0, 10)) == nil)
+    }
+}
+
+extension CalendarEvent {
+    /// Start of each day the event covers, clipped to `range`. An end at midnight stays
+    /// on the day before; a zero-length event still covers its own day.
+    func days(in range: DateInterval = DateInterval(start: .distantPast, end: .distantFuture)) -> [Date] {
+        let cal = Calendar.current
+        let last = min(max(end.addingTimeInterval(-1), start), range.end.addingTimeInterval(-1))
+        var days: [Date] = []
+        var day = cal.startOfDay(for: max(start, range.start))
+        while day <= last {
+            days.append(day)
+            day = cal.date(byAdding: .day, value: 1, to: day)!
+        }
+        return days
     }
 }

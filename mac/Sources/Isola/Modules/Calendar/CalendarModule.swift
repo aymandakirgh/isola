@@ -74,12 +74,13 @@ enum CalendarModule {
     }
 
     private static func registerDebug() {
+        // `in` and `length` are minutes (a negative `in` with a long `length` makes a multi-day event).
         Debug.on("cal.event") { args in
             let minutes = Double(args["in"] ?? "5") ?? 5
             let start = Date().addingTimeInterval(minutes * 60)
             let event = CalendarEvent(
                 id: "debug-\(UUID().uuidString)", title: args["title"] ?? "Design review", start: start,
-                end: start.addingTimeInterval(45 * 60), calendarColor: .systemPurple, location: args["location"]
+                end: start.addingTimeInterval((Double(args["length"] ?? "45") ?? 45) * 60), calendarColor: .systemPurple, location: args["location"]
             )
             CalendarModel.shared.debugEvents.append(event)
             CalendarSource.shared.reload()
@@ -115,6 +116,7 @@ enum CalendarModule {
         registerSettings()
         WeatherCode.selfCheck()
         CalendarText.selfCheck()
+        CalendarSource.selfCheck()
 
         let now = Date()
         let day = Calendar.current.startOfDay(for: now)
@@ -140,6 +142,17 @@ enum CalendarModule {
         let panel = CalendarPanel(events: events, weekCounts: counts, weather: weather, timer: nil, dismissedCount: 0, lunar: false, now: now)
         let emptyPanel = CalendarPanel(events: [events[0]], weekCounts: counts, weather: weather, timer: nil, dismissedCount: 2, lunar: true, now: now)
         let timerPanel = CalendarPanel(events: events, weekCounts: counts, weather: weather, timer: timer, dismissedCount: 0, lunar: false, now: now)
+        // Split days: an all-day offsite and a timed conference, both yesterday → tomorrow.
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: day)!
+        let multiDay = [
+            CalendarEvent(id: "g-offsite", title: "Lisbon offsite", start: yesterday, end: yesterday.addingTimeInterval(3 * 86400), calendarColor: .systemGreen, isAllDay: true),
+            CalendarEvent(id: "g-conf", title: "Web Summit", start: yesterday.addingTimeInterval(9 * 3600), end: yesterday.addingTimeInterval(2 * 86400 + 18 * 3600), calendarColor: .systemBlue, location: "FIL, Lisbon"),
+            review,
+        ]
+        let week = Calendar.current.dateInterval(of: .weekOfYear, for: day)!
+        let multiDayPanel = CalendarPanel(
+            events: multiDay, weekCounts: CalendarSource.counts(multiDay, in: week), weather: weather, timer: nil, dismissedCount: 0, lunar: false, now: now
+        )
 
         for (suffix, g) in [("pill", NotchGeometry.pillPreview), ("notch", NotchGeometry.notchPreview)] {
             Gallery.island("calendar-activity-\(suffix)", item: CalendarItems.event(review, panel: panel), geometry: g)
@@ -151,6 +164,7 @@ enum CalendarModule {
         Gallery.island("calendar-idle", item: CalendarItems.idle(panel: panel, nextEvent: review))
         Gallery.island("calendar-expanded-events", item: CalendarItems.event(review, panel: panel), expanded: true)
         Gallery.island("calendar-expanded-empty", item: CalendarItems.event(review, panel: emptyPanel), expanded: true)
+        Gallery.island("calendar-expanded-multiday", item: CalendarItems.event(review, panel: multiDayPanel), expanded: true)
         Gallery.island("calendar-expanded-timer", item: CalendarItems.event(review, panel: timerPanel), expanded: true, geometry: .notchPreview)
         Gallery.add("calendar-settings", size: CGSize(width: 560, height: 980)) {
             CalendarSettingsView().background(Color(nsColor: .windowBackgroundColor))

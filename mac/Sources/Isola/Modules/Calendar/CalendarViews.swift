@@ -273,12 +273,12 @@ struct CalendarPanel: View {
         let upcoming = events.filter { (!splitAllDay || !$0.isAllDay) && $0.end > now }
         if upcoming.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                if !allDay.isEmpty { AllDayChips(events: allDay, colors: colors) }
+                if !allDay.isEmpty { AllDayChips(events: allDay, now: now, colors: colors) }
                 EmptyDay(weather: weatherOnEmptyDay ? weather : nil)
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                if !allDay.isEmpty { AllDayChips(events: allDay, colors: colors) }
+                if !allDay.isEmpty { AllDayChips(events: allDay, now: now, colors: colors) }
                 ForEach(upcoming.prefix(allDay.isEmpty ? 2 : 1)) { EventRow(event: $0, now: now, colors: colors) }
             }
         }
@@ -362,6 +362,7 @@ private struct DayCell: View {
 
 private struct AllDayChips: View {
     var events: [CalendarEvent]
+    var now: Date
     var colors: Bool
     var body: some View {
         HStack(spacing: 6) {
@@ -369,6 +370,7 @@ private struct AllDayChips: View {
                 HStack(spacing: 4) {
                     Circle().fill(colors ? Color(nsColor: e.calendarColor) : Palette.muted).frame(width: 5, height: 5)
                     Text(e.title).lineLimit(1)
+                    if let span = CalendarText.span(e, on: now) { Text(span).foregroundStyle(Palette.muted).fixedSize() }
                 }
                 .font(.system(size: 10.5, weight: .semibold))
                 .padding(.horizontal, 7).padding(.vertical, 2.5)
@@ -390,7 +392,8 @@ private struct EventRow: View {
             RoundedRectangle(cornerRadius: 1.5).fill(colors ? Color(nsColor: event.calendarColor) : Palette.muted).frame(width: 3, height: 27)
             VStack(alignment: .leading, spacing: 1) {
                 Text(event.title).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
-                Text(CalendarText.range(event.start, event.end) + (event.location.map { " · \($0)" } ?? ""))
+                let when = CalendarText.span(event, on: now) ?? (event.isAllDay ? "All day" : CalendarText.range(event.start, event.end))
+                Text(when + (event.location.map { " · \($0)" } ?? ""))
                     .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Palette.muted).lineLimit(1)
             }
             Spacer(minLength: 6)
@@ -538,6 +541,16 @@ enum CalendarText {
 
     static func time(_ date: Date) -> String { date.formatted(date: .omitted, time: .shortened) }
     static func range(_ start: Date, _ end: Date) -> String { "\(time(start)) – \(time(end))" }
+
+    /// Multi-day events: "Day 1 of 3 · from 22:00", "Day 2 of 3", "Day 3 of 3 · until 07:10".
+    /// nil for an event that starts and ends on the same day.
+    static func span(_ e: CalendarEvent, on date: Date) -> String? {
+        let days = e.days()
+        guard days.count > 1, let i = days.firstIndex(of: Calendar.current.startOfDay(for: date)) else { return nil }
+        let label = "Day \(i + 1) of \(days.count)"
+        if e.isAllDay { return label }
+        return i == 0 ? "\(label) · from \(time(e.start))" : i == days.count - 1 ? "\(label) · until \(time(e.end))" : label
+    }
     static func month(_ date: Date) -> String { date.formatted(.dateTime.month(.wide)) }
     static func dayNumber(_ date: Date) -> String { String(Calendar.current.component(.day, from: date)) }
     static func weekdayInitial(_ date: Date) -> String { date.formatted(.dateTime.weekday(.narrow)) }
