@@ -24,7 +24,7 @@ enum SettingsModule {
         Debug.on("license.reset") { _ in License.shared.reset() }
         Debug.on("license.state") { _ in
             let l = License.shared
-            Debug.reply("key=\(l.key ?? "none") server=\(l.serverStatus) registered=\(l.registered) devices=\(l.devices.count)")
+            Debug.reply("key=\(License.mask(l.key)) server=\(l.serverStatus) registered=\(l.registered) devices=\(l.devices.count) pending=\(l.pendingDeactivations)")
         }
         Debug.on("update.check") { _ in Updates.shared.check() }
         Debug.on("update.prompt") { a in
@@ -82,11 +82,10 @@ enum MenuEntry {
         return list
     }
 
-    /// Timers belong to the Calendar module; go through its `timer.start` command.
+    /// Timers belong to the Calendar module; go through its `timer.start` command, in this process
+    /// (release builds don't listen to isolactl).
     @MainActor static func startTimer(minutes: Int) {
-        DistributedNotificationCenter.default().postNotificationName(
-            Debug.notification, object: "timer.start", userInfo: ["seconds": String(minutes * 60)], deliverImmediately: true
-        )
+        Debug.run("timer.start", ["seconds": String(minutes * 60)])
     }
 }
 
@@ -234,14 +233,17 @@ enum SettingsGallery {
         window("settings-license-trial", section: "license")
         license.preview(key: nil, devices: [], firstLaunch: Date().addingTimeInterval(-80 * hour), message: "That doesn’t look like an Isola license key.")
         window("settings-license-expired", section: "license")
-        let studio = LicensedMac(id: "studio", name: "Studio", model: "Mac14,13", activated: Date().addingTimeInterval(-40 * 24 * hour))
+        // In activation order, other Macs under the server's handles: Studio came first, so this Mac
+        // can't remove it; the Air came after.
+        let studio = LicensedMac(id: "kQ3vX9_bR2mT7wYc1LpZ0a", name: "Studio", model: "Mac14,13", activated: Date().addingTimeInterval(-40 * 24 * hour))
         var me = license.thisMac
         me.activated = Date().addingTimeInterval(-3 * 24 * hour)
-        license.preview(key: License.makeKey(seed: 7), devices: [me, studio], firstLaunch: Date().addingTimeInterval(-300 * hour))
+        let air = LicensedMac(id: "Zp8LqW2nV5xR0tYb7MkC3d", name: "Air", model: "MacBookAir10,1", activated: Date().addingTimeInterval(-1 * 24 * hour))
+        license.preview(key: License.makeKey(seed: 7), devices: [studio, me, air], firstLaunch: Date().addingTimeInterval(-300 * hour))
         Updates.shared.preview(Updates.sample, checked: Date().addingTimeInterval(-2 * hour))
         window("settings-license-licensed", section: "license")
-        license.preview(key: License.makeKey(seed: 7), devices: [me, studio], firstLaunch: Date().addingTimeInterval(-300 * hour),
-                        message: "Couldn’t reach the license server. Try again when you’re online.", serverStatus: "offline")
+        license.preview(key: License.makeKey(seed: 7), devices: [studio, me], firstLaunch: Date().addingTimeInterval(-300 * hour),
+                        message: License.unreachable, serverStatus: "offline")
         window("settings-license-offline", section: "license")
 
         for step in OnboardingModel.Step.allCases {

@@ -84,7 +84,7 @@ struct SettingsRootView: View {
 @MainActor
 enum SettingsWindow {
     static let nav = SettingsNav()
-    private static var window: NSWindow?
+    private(set) static var window: NSWindow?
 
     static func show(section: String? = nil) {
         if let section { nav.selection = section }

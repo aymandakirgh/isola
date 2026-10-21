@@ -6,6 +6,10 @@ cd "$(dirname "$0")/.."
 OUT=${1:-build/tour}
 mkdir -p "$OUT"
 CTL=build/isolactl
+# Release builds (scripts/build.sh) only listen to isolactl when asked. Once, then relaunch Isola:
+#   defaults write app.isola.mac debug.channel -bool true     (or launch it with ISOLA_DEBUG=1)
+# `defaults delete app.isola.mac debug.channel` turns it off again. Debug builds always listen.
+$CTL state >/dev/null || { echo "tour: Isola isn't answering isolactl (see the top of this script)"; exit 1; }
 # Region around the island on the main display (points); override for other screens.
 W=$(system_profiler SPDisplaysDataType 2>/dev/null | awk '/Main Display: Yes/{print prev} {prev=$0}' | head -1 | grep -oE '[0-9]+ x' | head -1 | tr -d ' x')
 W=${W:-2560}

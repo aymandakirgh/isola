@@ -1,17 +1,33 @@
 import AppKit
 
 /// Command channel for scripting and tests: `isolactl <command> key=value ...`
-/// posts a distributed notification that lands here.
+/// posts a distributed notification that lands here. Any process on the Mac can post one (and
+/// read the replies), so a release build listens only when asked to:
+/// `defaults write app.isola.mac debug.channel -bool true`, or ISOLA_DEBUG=1 at launch.
 @MainActor
 enum Debug {
     static let notification = Notification.Name("app.isola.debug")
     private static var handlers: [String: ([String: String]) -> Void] = [:]
 
+    static var enabled: Bool {
+        #if DEBUG
+            return true
+        #else
+            return UserDefaults.standard.bool(forKey: "debug.channel") || ProcessInfo.processInfo.environment["ISOLA_DEBUG"] == "1"
+        #endif
+    }
+
     static func on(_ command: String, _ handler: @escaping ([String: String]) -> Void) {
         handlers[command] = handler
     }
 
+    /// Runs a command in this process, whether or not the channel listens (the menu's timers).
+    static func run(_ command: String, _ args: [String: String] = [:]) {
+        handlers[command]?(args)
+    }
+
     static func start() {
+        guard enabled else { return }
         registerBuiltins()
         DistributedNotificationCenter.default().addObserver(forName: notification, object: nil, queue: .main) { note in
             let command = note.object as? String ?? ""

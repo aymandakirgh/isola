@@ -41,6 +41,10 @@ scripts/tour.sh build/tour       # screenshot every island state on the live scr
 build/Isola.app/Contents/MacOS/Isola --gallery /tmp/isola-gallery   # offscreen renders
 ```
 
+Any process on the Mac can post to `isolactl`'s channel, so a release build (what `scripts/build.sh` makes) only listens when asked: `defaults write app.isola.mac debug.channel -bool true` (or launch it with `ISOLA_DEBUG=1`), then relaunch Isola; `defaults delete app.isola.mac debug.channel` turns it off. Debug builds always listen. `license.state` shows only the key's last group.
+
+The app's licence id is a salted SHA-256 of the Mac's IOPlatformUUID, so preferences copied to another Mac (Migration Assistant) don't bring it along. Only a definite answer from the licence server (403, 404, or 409 at activation) changes the licence; an outage, a throttle or a checkpoint page keeps it. Deactivating this Mac works offline and reaches the server at a later launch or License tab visit.
+
 `public/downloads/Isola.dmg` is this build. It is signed ad hoc, not notarized: the first launch needs System Settings → Privacy & Security → Open Anyway (the DMG includes a note).
 
 Now Playing on macOS 15.4+: MediaRemote only answers Apple-signed processes, so `Helpers/MediaRemoteHelper.m` is loaded into `/usr/bin/perl` and streams JSON to the app; Music/Spotify AppleScript is the fallback.
