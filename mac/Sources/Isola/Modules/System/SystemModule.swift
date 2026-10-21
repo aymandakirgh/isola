@@ -20,12 +20,12 @@ enum SystemModule {
     }
 
     /// Touching IOBluetooth triggers the Bluetooth permission prompt, so wait until
-    /// onboarding has explained it (and the user hasn't turned the feature off).
+    /// onboarding has explained it. The connect setting only gates announcements: device
+    /// low-battery warnings and the Lock Screen connectivity widget need the monitor too.
     private static func startBluetoothWhenOnboarded() {
         var started = false
         let tryStart = {
-            guard !started, UserDefaults.standard.bool(forKey: "onboarded"),
-                  UserDefaults.standard.object(forKey: "system.bluetoothNotification") as? Bool ?? true else { return }
+            guard !started, UserDefaults.standard.bool(forKey: "onboarded") else { return }
             started = true
             BluetoothMonitor.shared.start()
         }
