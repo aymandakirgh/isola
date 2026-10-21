@@ -83,8 +83,11 @@ final class MediaController {
         }
         state.isPlaying = s.isPlaying
         state.duration = s.duration
-        state.elapsed = s.elapsed
-        state.elapsedAt = s.timestamp
+        // A local seek already moved the bar; give the source a second to report it.
+        if trackChanged || Date().timeIntervalSince(state.seekedAt) > 1 {
+            state.elapsed = s.elapsed
+            state.elapsedAt = s.timestamp
+        }
         // Sources report rate 0 while paused: keep the chosen speed until playback says otherwise.
         if s.isPlaying || s.bundleID != state.sourceBundleID { state.rate = s.rate > 0 ? s.rate : 1 }
         state.shuffle = s.shuffle
@@ -185,6 +188,11 @@ enum MediaModule {
         Debug.on("media.resume") { _ in if !NowPlayingState.shared.isPlaying { NowPlayingState.shared.commands.togglePlay() } }
         Debug.on("media.next") { _ in NowPlayingState.shared.commands.next() }
         Debug.on("media.previous") { _ in NowPlayingState.shared.commands.previous() }
+        // to=<seconds> or by=<±seconds>, through the same optimistic path as the scrubber.
+        Debug.on("media.seek") { args in
+            let s = NowPlayingState.shared
+            s.seek(to: args["to"].flatMap(Double.init) ?? s.currentElapsed() + (args["by"].flatMap(Double.init) ?? 0))
+        }
         Debug.on("media.end") { _ in sim.stop() }
         Debug.on("media.state") { _ in
             let s = NowPlayingState.shared
@@ -192,10 +200,21 @@ enum MediaModule {
         }
     }
 
+    /// Runs with `Isola --gallery`: the player's own logic.
+    static func selfCheck() {
+        let s = NowPlayingState()
+        s.duration = 200
+        s.seek(to: -15)
+        precondition(s.elapsed == 0, "seek clamps at the start: \(s.elapsed)")
+        s.seek(to: 500)
+        precondition(s.elapsed == 200, "seek clamps at the end: \(s.elapsed)")
+    }
+
     static func gallery() {
         registerSettings()
         TitleCleaner.selfCheck()
         BandAnalyzer.selfCheck()
+        selfCheck()
         MediaUI.shared.offscreen = true
 
         let playing = SimulatedPlayer.sampleState(index: 0, playing: true)

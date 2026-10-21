@@ -179,7 +179,8 @@ private struct ProgressScrubber: View {
             .foregroundStyle(Palette.muted)
             .frame(maxWidth: .infinity, minHeight: 14)
         } else {
-            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+            // Only on screen while expanded, so a per-frame clock costs little and moves smoothly.
+            TimelineView(.animation(minimumInterval: 1 / 30, paused: !state.isPlaying)) { context in
                 let duration = state.duration
                 let elapsed = scrub.fraction.map { $0 * duration } ?? state.currentElapsed(at: context.date)
                 let fraction = min(1, max(0, elapsed / duration))
@@ -198,7 +199,7 @@ private struct ProgressScrubber: View {
                             DragGesture(minimumDistance: 0)
                                 .onChanged { scrub.fraction = min(1, max(0, $0.location.x / geo.size.width)) }
                                 .onEnded { _ in
-                                    if let f = scrub.fraction { state.commands.seek(f * duration) }
+                                    if let f = scrub.fraction { state.seek(to: f * duration) }
                                     scrub.fraction = nil
                                 }
                         )
