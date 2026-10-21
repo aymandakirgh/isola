@@ -90,6 +90,7 @@ final class WeatherState {
     var symbol = "sun.max.fill"
     var condition = ""
     var precipitationChance: Double?  // 0...1
+    var precipitationDetail: String?  // "Rain at 18:00 · 60%"; nil when the next hours stay dry
     var place = ""
     var displayTemperature: String {
         let t = useFahrenheit ? temperature * 9 / 5 + 32 : temperature
