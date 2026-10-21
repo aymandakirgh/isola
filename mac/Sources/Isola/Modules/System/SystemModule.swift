@@ -62,10 +62,12 @@ enum SystemModule {
         }
         Debug.on("system.bluetooth") { a in
             let name = a["name"] ?? "AirPods Pro"
-            var kind = BluetoothMonitor.classify(name: name)
+            // `product=0x2027`: recognise a renamed device by its Apple product ID.
+            let product = a["product"].flatMap { Int($0.lowercased().replacingOccurrences(of: "0x", with: ""), radix: 16) }
+            var kind = product.flatMap(BluetoothMonitor.model) ?? BluetoothMonitor.classify(name: name)
             if let symbol = a["kind"] {
                 kind.symbol = symbol
-                kind.earbuds = ["airpods", "airpodspro", "beats.earphones", "earbuds"].contains(symbol)
+                kind.earbuds = ["airpods", "airpods.gen3", "airpods.gen4", "airpods.pro", "airpodspro", "beats.earphones", "earbuds"].contains(symbol)
             }
             let device = ConnectedDevice(
                 id: "debug-\(name)", name: name, symbol: kind.symbol,
@@ -145,10 +147,17 @@ enum SystemModule {
 
     /// Parser/classifier checks; runs with `Isola --gallery` (asserts trip in debug builds).
     private static func selfCheck() {
-        let profiler = #"{"SPBluetoothDataType":[{"device_connected":[{"AirPods Pro":{"device_address":"AA-BB-CC-DD-EE-FF","device_batteryLevelLeft":"76%","device_batteryLevelRight":"80%","device_batteryLevelCase":"90 %"}}]}]}"#
-        let levels = BluetoothMonitor.profilerLevels(Data(profiler.utf8), address: "aa:bb:cc:dd:ee:ff")
-        assert(levels?.main == 0.76 && levels?.case == 0.9, "profiler battery parse")
-        assert(BluetoothMonitor.classify(name: "Ayman’s AirPods Pro") == ("airpodspro", true, true), "AirPods Pro")
+        let profiler = #"{"SPBluetoothDataType":[{"device_connected":[{"AirPods Pro":{"device_address":"AA-BB-CC-DD-EE-FF","device_batteryLevelLeft":"76%","device_batteryLevelRight":"80%","device_batteryLevelCase":"90 %","device_productID":"0x2014","device_vendorID":"0x004C"}}],"device_not_connected":[{"Kitchen":{"device_address":"11:22:33:44:55:66","device_productID":"0x2027","device_vendorID":"0x004C"}},{"Speaker":{"device_address":"22:22:33:44:55:66","device_productID":"0x2014","device_vendorID":"0x0A12"}}]}]}"#
+        let paired = BluetoothMonitor.profilerDevices(Data(profiler.utf8))
+        let pods = paired[BluetoothMonitor.key("aa-bb-cc-dd-ee-ff")]
+        precondition(pods?.main == 0.76 && pods?.case == 0.9 && pods?.productID == 0x2014, "profiler battery and product ID")
+        precondition(paired["11:22:33:44:55:66"]?.productID == 0x2027 && paired["11:22:33:44:55:66"]?.main == nil, "paired but not connected")
+        precondition(paired["22:22:33:44:55:66"] != nil && paired["22:22:33:44:55:66"]?.productID == nil, "product IDs only under Apple's vendor ID")
+        let pro = DeviceSymbol.first(["airpods.pro", "airpodspro"])
+        precondition(BluetoothMonitor.model(0x2027).map { $0.symbol == pro && $0.earbuds } == true, "renamed AirPods Pro 3 by product ID")
+        precondition(BluetoothMonitor.model(0x201F)?.earbuds == false && BluetoothMonitor.model(0x1234) == nil, "AirPods Max (USB-C); unknown IDs fall back")
+        precondition(BluetoothMonitor.models.values.allSatisfy { DeviceSymbol.first($0.symbols) != "headphones" }, "every model has a symbol on this macOS")
+        assert(BluetoothMonitor.classify(name: "Ayman’s AirPods Pro") == (pro, true, true), "AirPods Pro")
         assert(BluetoothMonitor.classify(name: "Beats Studio Pro") == ("beats.headphones", true, false), "Beats over-ear")
         assert(BluetoothMonitor.classify(name: "Kitchen HomePod").symbol == "homepod.fill", "HomePod")
         let dnd = #"{"data":[{"storeAssertionRecords":[{"assertionDetails":{"assertionDetailsModeIdentifier":"com.apple.focus.work"}}]}]}"#

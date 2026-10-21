@@ -53,11 +53,20 @@ enum SystemAudio {
         let id = device
         var name: Unmanaged<CFString>?
         get(id, kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal, &name)
+        var model: Unmanaged<CFString>?
+        get(id, kAudioDevicePropertyModelUID, scope: kAudioObjectPropertyScopeGlobal, &model)
         var transport = UInt32(0)
         get(id, kAudioDevicePropertyTransportType, scope: kAudioObjectPropertyScopeGlobal, &transport)
         var source = UInt32(0)
         let hasSource = get(id, kAudioDevicePropertyDataSource, &source)
-        return HUDOutput(name: name?.takeRetainedValue() as String? ?? "Speakers", transport: transport, dataSource: hasSource ? source : nil)
+        let deviceName = name?.takeRetainedValue() as String? ?? "Speakers"
+        // CoreAudio names a Bluetooth output after the device the Bluetooth monitor tracks.
+        let bluetooth = transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
+        let known = bluetooth ? DevicesState.shared.devices.first { $0.name == deviceName }?.symbol : nil
+        return HUDOutput(
+            name: deviceName, transport: transport, dataSource: hasSource ? source : nil,
+            deviceSymbol: known, model: model?.takeRetainedValue() as String?
+        )
     }
 
     // MARK: Listeners

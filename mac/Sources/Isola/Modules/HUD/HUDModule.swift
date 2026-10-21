@@ -61,19 +61,23 @@ struct HUDOutput: Equatable {
     var name: String
     var transport: UInt32
     var dataSource: UInt32?
+    /// Symbol of the Bluetooth device Isola recognised by product ID (renamed AirPods too).
+    var deviceSymbol: String?
+    /// CoreAudio model UID.
+    var model: String?
 
     /// Device glyph, or nil for plain speakers (drawn as level-aware speaker waves).
     var symbol: String? {
-        let n = name.lowercased()
-        if n.contains("airpods max") { return "airpodsmax" }
-        if n.contains("airpods pro") { return "airpodspro" }
-        if n.contains("airpods") { return n.contains("4") ? "airpods.gen4" : "airpods.gen3" }
-        if n.contains("beats") { return "beats.headphones" }
-        if n.contains("earpods") { return "earpods" }
-        if n.contains("homepod") { return "homepod.fill" }
+        if let deviceSymbol { return deviceSymbol }
+        let byName = BluetoothMonitor.classify(name: name)
+        if byName.audio { return byName.symbol }
         switch transport {
         case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: return "headphones"
-        case kAudioDeviceTransportTypeAirPlay: return "airplayaudio"
+        case kAudioDeviceTransportTypeAirPlay:
+            // A HomePod named after its room: CoreAudio's model may still say HomePod (its
+            // product type is AudioAccessoryN,N; 5 is the mini).
+            guard let model, model.contains("HomePod") || model.hasPrefix("AudioAccessory") else { return "airplayaudio" }
+            return model.hasPrefix("AudioAccessory5") || model.contains("mini") ? "homepod.mini.fill" : "homepod.fill"
         case kAudioDeviceTransportTypeHDMI, kAudioDeviceTransportTypeDisplayPort: return "tv"
         case kAudioDeviceTransportTypeBuiltIn where dataSource == 0x6864_706E: return "headphones"  // 'hdpn'
         default: return nil
@@ -107,10 +111,12 @@ struct HUDOutput: Equatable {
         }
     }
 
-    init(name: String, transport: UInt32, dataSource: UInt32? = nil) {
+    init(name: String, transport: UInt32, dataSource: UInt32? = nil, deviceSymbol: String? = nil, model: String? = nil) {
         self.name = name
         self.transport = transport
         self.dataSource = dataSource
+        self.deviceSymbol = deviceSymbol
+        self.model = model
     }
 }
 
@@ -251,7 +257,11 @@ enum HUDModule {
         assert(stepped(1, up: true, fine: false) == 1 && stepped(0, up: false, fine: false) == 0)
         assert(stepped(0.5, up: true, fine: true) == 0.515625)
         assert(HUDOutput.preset("speakers").symbol == nil && HUDOutput.preset("speakers").label == "Volume")
-        assert(HUDOutput.preset("airpodspro").symbol == "airpodspro" && HUDOutput.preset("airpodspro").label == "AirPods Pro")
+        assert(HUDOutput.preset("airpodspro").symbol == DeviceSymbol.first(["airpods.pro", "airpodspro"]) && HUDOutput.preset("airpodspro").label == "AirPods Pro")
+        let airPlay = kAudioDeviceTransportTypeAirPlay
+        precondition(HUDOutput(name: "Living Room", transport: airPlay, model: "AudioAccessory5,1").symbol == "homepod.mini.fill"
+            && HUDOutput(name: "Living Room", transport: airPlay, model: "AppleTV11,1").symbol == "airplayaudio", "HomePod by CoreAudio model")
+        precondition(HUDOutput(name: "Kitchen", transport: kAudioDeviceTransportTypeBluetooth, deviceSymbol: "airpods.max").label == "Kitchen", "renamed device keeps its name")
         assert(HUDOutput(name: "MacBook Pro Speakers", transport: kAudioDeviceTransportTypeBuiltIn, dataSource: 0x6864_706E).label == "Speakers")
         assert(abs(HUDOutput.approximateDecibels(0.5) + 12.04) < 0.01 && HUDOutput.approximateDecibels(0) == -63.5)
     }
