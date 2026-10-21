@@ -24,6 +24,7 @@ export function DownloadCard({ href }: { href: string }) {
       className="group relative isolate my-12 flex w-full max-w-96 flex-col items-center justify-center rounded-3xl px-0.5 pt-5.5 pb-8.5 outline-hidden sm:my-16"
       href={href}
       download
+      data-an="download"
       aria-label="Download for Mac"
     >
       <span

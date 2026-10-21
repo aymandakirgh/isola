@@ -40,7 +40,7 @@ function PurchaseButton() {
         flicking.current = true;
         animate(
           seal.current,
-          { transform: ["rotate(0)", "rotate(30deg)"] },
+          { transform: ["rotate(0)", "rotate(45deg)"] },
           { duration: 0.5, ease: "easeOut" },
         ).finished.then(() => (flicking.current = false));
       }}
