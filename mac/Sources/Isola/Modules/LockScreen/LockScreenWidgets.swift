@@ -360,6 +360,9 @@ struct NowPlayingWidget: View {
             ZStack {
                 if gallery {
                     LockPalette.stone900.opacity(0.42)
+                } else if #available(macOS 26, *) {
+                    // Tahoe: Liquid Glass instead of the older blur material.
+                    Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
                 } else {
                     Rectangle().fill(.ultraThinMaterial)
                 }
