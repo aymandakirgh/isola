@@ -604,7 +604,11 @@ struct ExpandedPlayer: View {
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
-        .onDisappear { if !MediaPreferences.shared.keepVolumeOpen { ui.volumeOpen = false } }
+        .onDisappear {
+            // Collapsing under the pointer skips mouseExited, so the glare would reopen where it was.
+            ui.glarePoint = nil
+            if !MediaPreferences.shared.keepVolumeOpen { ui.volumeOpen = false }
+        }
     }
 }
 
