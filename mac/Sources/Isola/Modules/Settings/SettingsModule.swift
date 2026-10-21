@@ -11,6 +11,15 @@ enum SettingsModule {
         Debug.on("settings.open") { SettingsWindow.show(section: $0["section"]) }
         Debug.on("settings.close") { _ in SettingsWindow.close() }
         Debug.on("settings.onboarding") { _ in OnboardingWindow.show() }
+        // Live permission checks: `perm.request kind=bluetooth|calendar|focus|accessibility|automation|fullDiskAccess|location`.
+        Debug.on("perm.request") { a in
+            if a["kind"] == "location" { return Weather.shared.useCurrentLocation() }
+            Permission(rawValue: a["kind"] ?? "")?.request {}
+        }
+        Debug.on("perm.state") { _ in
+            let states = Permission.allCases.map { "\($0.rawValue)=\($0.status())" } + ["location=\(Weather.shared.locationAuthorized)"]
+            Debug.reply(states.joined(separator: " "))
+        }
         Debug.on("license.set") { License.shared.activate($0["key"] ?? "") }
         Debug.on("license.reset") { _ in License.shared.reset() }
         Debug.on("update.check") { _ in Updates.shared.check() }
