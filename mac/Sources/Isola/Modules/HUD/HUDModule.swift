@@ -66,11 +66,12 @@ struct HUDOutput: Equatable {
     var symbol: String? {
         let n = name.lowercased()
         if n.contains("airpods max") { return "airpodsmax" }
-        if n.contains("airpods pro") { return "airpodspro" }
+        if n.contains("airpods pro") { return n.contains("pro 3") ? DeviceSymbol.resolve("airpods.pro.gen3", fallback: "airpodspro") : "airpodspro" }
         if n.contains("airpods") { return n.contains("4") ? "airpods.gen4" : "airpods.gen3" }
         if n.contains("beats") { return "beats.headphones" }
         if n.contains("earpods") { return "earpods" }
         if n.contains("homepod") { return "homepod.fill" }
+        if n.contains("display") { return "display" }  // Studio Display, LG UltraFine "Display Audio" (USB)
         switch transport {
         case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: return "headphones"
         case kAudioDeviceTransportTypeAirPlay: return "airplayaudio"
@@ -126,6 +127,8 @@ final class HUDModel {
 enum HUDModule {
     private static var lastVolume: (level: Double, muted: Bool)?
     private static var ready = false
+    /// In-island volume controls set this so their own changes don't pop the HUD over them.
+    static var quietUntil = Date.distantPast
 
     static func start() {
         registerSettings()
@@ -176,7 +179,7 @@ enum HUDModule {
         guard let level = SystemAudio.volume() else { return }
         let muted = SystemAudio.isMuted()
         defer { lastVolume = (level, muted) }
-        guard ready, let last = lastVolume, abs(last.level - level) > 0.001 || last.muted != muted else { return }
+        guard ready, Date() > quietUntil, let last = lastVolume, abs(last.level - level) > 0.001 || last.muted != muted else { return }
         showVolume(level: level, muted: muted)
     }
 

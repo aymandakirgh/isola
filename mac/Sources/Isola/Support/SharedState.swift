@@ -18,12 +18,15 @@ final class NowPlayingState {
     var elapsed: TimeInterval = 0
     /// When `elapsed` was sampled, for live interpolation.
     var elapsedAt = Date()
+    /// Last local seek or speed change; snapshots that arrive just after it may still carry the old values.
+    var adjustedAt = Date.distantPast
     var rate: Double = 1
     var shuffle = false
     var repeatMode = 0  // 0 off, 1 one, 2 all
     var sourceBundleID: String?
     var isExplicit = false
     var hasTrack: Bool { !title.isEmpty || !artist.isEmpty }
+    var isPodcast: Bool { sourceBundleID == "com.apple.podcasts" }
 
     /// Commands are wired by the Media module.
     var commands = MediaCommands()
@@ -31,6 +34,23 @@ final class NowPlayingState {
     func currentElapsed(at date: Date = Date()) -> TimeInterval {
         guard isPlaying else { return elapsed }
         return min(duration > 0 ? duration : .infinity, elapsed + date.timeIntervalSince(elapsedAt) * rate)
+    }
+
+    /// Seek and show the new position at once, before the source confirms it.
+    func seek(to time: TimeInterval) {
+        elapsed = max(0, duration > 0 ? min(time, duration) : time)
+        elapsedAt = Date()
+        adjustedAt = elapsedAt
+        commands.seek(elapsed)
+    }
+
+    /// Change speed; the label and the interpolated position follow before the source confirms.
+    func setRate(_ value: Double) {
+        elapsed = currentElapsed()
+        elapsedAt = Date()
+        adjustedAt = elapsedAt
+        rate = value
+        commands.setRate(value)
     }
 }
 
@@ -79,6 +99,7 @@ final class FocusState {
     var active = false
     var name = ""
     var symbol = "moon.fill"
+    var tint: NSColor = .systemIndigo
 }
 
 @MainActor @Observable
