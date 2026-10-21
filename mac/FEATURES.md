@@ -9,9 +9,9 @@ Every line of the reference app's public changelog (165 items, versions 1.0–1.
 - **Missing**: not implemented. **Blocked**: needs something this project can't have (Apple entitlements or notarization, a third-party account, hardware).
 - **N/A**: a line about the reference product's own history rather than a capability.
 
-**165 items:** ✅ Done 131 · 🔶 Built, unverified 17 · 🟡 Partial 10 · 🧪 Simulated 1 · ⬜ Missing 3 · ⛔ Blocked 3
+**165 items:** ✅ Done 133 · 🔶 Built, unverified 26 · 🟡 Partial 3 · 🧪 Simulated 1 · ⛔ Blocked 2
 
-**Seen live:** 54 of them were exercised on the test Mac (✓ column), with real system data or with simulated input through the same code path (`isolactl`). The rest were checked by reading the code and by the offscreen `--gallery` self-checks.
+**Seen live:** 56 of them were exercised on the test Mac (✓ column), with real system data or with simulated input through the same code path (`isolactl`). The rest were checked by reading the code and by the offscreen `--gallery` self-checks.
 
 Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1 Pro, clamshell, one 2560×1440 display, macOS 27) with `isolactl` and `scripts/tour.sh`; permission-gated paths (system audio capture, location, Bluetooth, calendars) were not triggered on that shared machine.
 
@@ -20,13 +20,13 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | # | Feature | Status | Seen live | Evidence | Note |
 |---|---|---|---|---|---|
 | 1 | Added extended support for AirPlay | ✅ Done | ✓ | `Sources/Isola/Modules/Media/MediaViews.swift:452` | AirPlay outputs show their glyph, name and volume. The route picker moved from the top row into the volume row. |
-| 2 | Added speed control for Spotify podcasts | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/MediaViews.swift:402` | Speed menu sends MediaRemote's rate command; hidden for AppleScript sources. Spotify isn't installed on the test Mac. |
-| 3 | Added AutoMix support | 🟡 Partial |  | `Helpers/MediaRemoteHelper.m:99` | IsInTransition is sent and shows an AutoMix tag in the peek and expanded player. Never seen live (needs Apple Music AutoMix). |
-| 4 | Muted native focus banner (macOS 27+) | ⛔ Blocked |  |  | No public or documented private switch for macOS 27's own Focus banner; Isola can only add its own. |
-| 5 | Muted native connectivity banner (macOS 27+) | ⛔ Blocked |  |  | No public or documented private switch for macOS 27's own connectivity banner. |
-| 6 | Added Spotify like | 🟡 Partial | ✓ | `Helpers/MediaRemoteHelper.m:116` | Heart sends MediaRemote's like command and reads the liked state (verified live with a test publisher); Spotify itself untested, Music via AppleScript. |
-| 7 | Added Spotify explicit tag | 🟡 Partial |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:215,265,297-309` | Only the generic MediaRemote explicit flag; unverified that Spotify sets it. The Spotify AppleScript path never sets explicit. |
-| 8 | Added Spotify repeat one | 🟡 Partial |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:214,298,345; Sources/Isola/Modules/Media/MediaViews.swift:372` | The repeat.1 icon shows only if Spotify reports repeat-one to MediaRemote (unverified). AppleScript maps Spotify repeat to all/off only. |
+| 2 | Added speed control for Spotify podcasts | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/MediaViews.swift:403; SpotifyWeb.swift:75` | The Web API has no playback-speed endpoint. The existing MediaRemote speed command is unchanged and still untested with Spotify. |
+| 3 | Added AutoMix support | 🔶 Built, unverified |  | `Helpers/MediaRemoteHelper.m:99` | The helper reads MediaRemote's IsInTransition and shows an AutoMix tag; needs Apple Music AutoMix playback to see it, none on the test Mac. |
+| 4 | Muted native focus banner (macOS 27+) | ⛔ Blocked |  |  | macOS 27 draws it in Control Center's SystemBannerService, anchored to the Focus menu-bar item; no switch exists (only CenterSystemBanners, which moves it). |
+| 5 | Muted native connectivity banner (macOS 27+) | ⛔ Blocked |  |  | Same service, anchored to the Bluetooth menu-bar item; hiding it would need a private Control Center API or hiding that menu-bar item. |
+| 6 | Added Spotify like | 🔶 Built, unverified | ✓ | `Sources/Isola/Modules/Media/SpotifyWeb.swift:362; NowPlayingSources.swift:169` | Heart saves/removes via PUT/DELETE /me/library; saved state from /me/library/contains each poll; updates at once, reverts with a one-line notice on failure. |
+| 7 | Added Spotify explicit tag | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/SpotifyWeb.swift:30,47; MediaViews.swift:580` | The item's explicit flag from GET /me/player drives the existing E badge (gallery shot media-expanded-spotify). |
+| 8 | Added Spotify repeat one | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/SpotifyWeb.swift:39,376; NowPlayingSources.swift:255` | Cycles off→context→track via PUT /me/player/repeat; state read from /me/player; a 403 (Premium) shows one line, then uses the app's own repeat. |
 | 9 | Added colored outline support | ✅ Done | ✓ | `Sources/Isola/Island/IslandView.swift:181` | Drawn just inside the animated island shape. Media uses the artwork colours, everything else a neutral grey. |
 | 10 | Added compact outline support | ✅ Done | ✓ | `Sources/Isola/Island/IslandView.swift:183` | 0.5 pt hairline that fades out as the panel expands. |
 | 11 | Added contrast outline (macOS 26+) | ✅ Done | ✓ | `Sources/Isola/Island/IslandView.swift:185` | Brighter white edge on all macOS versions; no glass edge, since glass can't be checked offscreen. |
@@ -41,7 +41,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 20 | Added simulated notch toggle | ✅ Done | ✓ | `Sources/Isola/Island/Geometry.swift:20; simulatedNotch (Sources/Isola/Modules/Settings/SettingsWindow.swift:175)` | On screens without a notch, docks the island flush to the top edge, shaped like a notch. |
 | 21 | Added duo mode | ✅ Done | ✓ | `Sources/Isola/Island/Island.swift:44` | Bubble (IslandView.swift:221) shows the other activity's glyph; click swaps (IslandWindows.swift:62,165). Clicking it is untested live. |
 | 22 | Added pill shape for notchless displays | ✅ Done | ✓ | `Sources/Isola/Island/Geometry.swift:19-20; Sources/Isola/Island/Island.swift:194` | Default on screens without a notch: a floating rounded pill 6 pt below the edge. Hidden when idle unless a setting is on. |
-| 23 | Added audio formats (Lossless/Dolby Atmos) | 🟡 Partial |  | `Helpers/MediaRemoteHelper.m:73` | Reads the format from the playing item's metadata. The request works, but no format was ever seen: no test source can publish one. |
+| 23 | Added audio formats (Lossless/Dolby Atmos) | 🔶 Built, unverified |  | `Helpers/MediaRemoteHelper.m:73` | Reads the playing item's audio format and shows Lossless / Dolby Atmos tags; no source on the test Mac publishes a format. |
 | 24 | Added new AirPods Max support | ✅ Done | ✓ | `Sources/Isola/Modules/System/Bluetooth.swift:189-191` | AirPods Max (Lightning, USB-C, Max 2) by product ID, airpods.max symbol, works even when renamed. |
 | 25 | Added calendar onboarding | ✅ Done |  | `Sources/Isola/Modules/Settings/Onboarding.swift:65-70,92-93; Sources/Isola/Modules/Settings/SettingsModule.swift:15` | The first-launch permissions step has a Calendar row that asks for access. Events may not appear until the calendar data reloads. |
 | 26 | Added accessibility onboarding | ✅ Done |  | `Sources/Isola/Modules/Settings/Onboarding.swift:63-64,88-91` | The Accessibility row opens the system prompt. The row doesn't update after granting, and the HUD takeover setting stays off. |
@@ -72,8 +72,8 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 46 | Added 3rd party calendar open support | ✅ Done |  | `Sources/Isola/Modules/Calendar/CalendarSource.swift:102-108; Sources/Isola/Modules/Calendar/CalendarViews.swift:471-475` | The picker lists whichever of Calendar, Fantastical and Notion Calendar are installed, and falls back to Calendar.app. |
 | 47 | Added restore dismissed calendar events | ✅ Done |  | `Sources/Isola/Modules/Calendar/CalendarViews.swift:26-31,303-305,476-479; calendar.dismissed` | Swipe up dismisses an event. "Restore N" in the expanded calendar and in Settings brings them back. |
 | 48 | Added split days calendar event support | ✅ Done | ✓ | `Sources/Isola/Modules/Calendar/CalendarSource.swift:227; Sources/Isola/Modules/Calendar/CalendarViews.swift:582` | Rows and all-day chips say "Day 2 of 3 · from 22:00 / until 07:10"; in-progress handling below. |
-| 49 | Added HomePod support | 🟡 Partial |  | `Sources/Isola/Modules/HUD/HUDModule.swift:84-87` | Checks the CoreAudio model UID (HomePod / AudioAccessoryN,N). No HomePod here, so not tested. |
-| 50 | Added AirPods Max Red support | ⬜ Missing |  |  | AirPods Max colours need Apple proximity-pairing BLE parsing and an AirPods Max to verify; not attempted. |
+| 49 | Added HomePod support | 🔶 Built, unverified |  | `Sources/Isola/Modules/HUD/HUDModule.swift:84` | HomePod recognised by name or CoreAudio model (AudioAccessoryN,N) for AirPlay outputs; no HomePod on the test Mac. |
+| 50 | Added AirPods Max Red support | 🔶 Built, unverified |  | `Sources/Isola/Modules/System/Bluetooth.swift:236` | Code 0x02, labelled "Red" for AirPods Max in Flipper's table, tints rose. Likely the gen-1 Pink finish; no hardware to confirm. |
 | 51 | Added AirPods Pro 3 support | ✅ Done | ✓ | `Sources/Isola/Modules/System/Bluetooth.swift:187-188` | AirPods Pro 3 (0x2027/0x2028); this macOS has no Pro 3 symbol, so it uses airpods.pro. |
 | 52 | Added copy link support to YouTube Music | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:624` | YouTube Music tab URL via the browser's AppleScript, only with Automation consent; not run on the test Mac. |
 | 53 | Restored HUD mute functionality | ✅ Done | ✓ | `Sources/Isola/Modules/HUD/HUDModule.swift:209-214; Sources/Isola/Modules/HUD/HUDControls.swift:93; Sources/Isola/Modules/HUD/HUDViews.swift:27-28` | The mute key toggles mute, and mute changes from elsewhere are caught too. The HUD shows a crossed-out speaker and "Muted". |
@@ -87,7 +87,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | # | Feature | Status | Seen live | Evidence | Note |
 |---|---|---|---|---|---|
 | 58 | Added opt click support to alternate between activity actions | ✅ Done | ✓ | `Sources/Isola/Modules/System/Power.swift:172; Sources/Isola/Modules/System/Focus.swift:182` | Option-click on charging switches between time to full and "46% · 96 W adapter"; on Focus it opens Focus settings. |
-| 59 | Reworked Alcove to fully match Tahoe style | 🟡 Partial |  | `Sources/Isola/Modules/Settings/SettingsWindow.swift:176` | APIs compile (SDK 27): glass Reset/Welcome buttons, About links in a GlassEffectContainer. Chrome left to the system; untested live. |
+| 59 | Reworked Alcove to fully match Tahoe style | ✅ Done | ✓ | `Sources/Isola/Modules/Settings/SettingsWindow.swift:176; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:364` | Built with the macOS 27 SDK: Settings and widgets take the Tahoe design, plus Liquid Glass on custom surfaces; seen live on macOS 27. |
 | 60 | Added multiple live activity support | ✅ Done | ✓ | `Sources/Isola/Island/Island.swift:10,24-31,73-76; Sources/Isola/Island/IslandWindows.swift:159-160` | Priority-sorted activity list; swipe down while expanded or middle click cycles. |
 | 61 | Added Dia browser support | 🟡 Partial |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:536` | Dia is activated only: as of mid-2025 it had no AppleScript dictionary. Not installed here to recheck. |
 | 62 | Added sleep focus sound option | 🔶 Built, unverified |  | `Sources/Isola/Modules/System/Focus.swift:57` | Soft sound when Sleep turns on (off by default); telling Sleep apart needs Full Disk Access. |
@@ -154,11 +154,11 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 108 | Improved device recognition support | ✅ Done |  | `Sources/Isola/Modules/System/Bluetooth.swift:137,265; Sources/Isola/Modules/HUD/HUDControls.swift:65` | 33-model table (AirPods + 17 Beats) from AppleDB, matched to system_profiler. The HUD uses it too. |
 | 109 | Restored system media support | ✅ Done | ✓ | `Sources/Isola/Modules/Media/MediaRemoteBridge.swift:22-56; Helpers/MediaRemoteHelper.m:78-101; Sources/Isola/Modules/Media/NowPlayingSources.swift:64-68` | Perl-hosted MediaRemote helper restores system-wide now playing on macOS 15.4+ (private API). |
 | 110 | Added copy link functionality | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:179` | Copy link for Apple Music (store id), Spotify and browsers; AppleScript paths compiled, not run without consent. |
-| 111 | Added Spotify podcast support | 🟡 Partial |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:610` | Spotify episodes now copy as open.spotify.com/episode links. The ±15 s skip is not done (player UI owner). |
-| 112 | Added additional AirPods Max colors | ⬜ Missing |  |  | Same as #50: colour variants need BLE advertisement parsing and hardware to verify. |
+| 111 | Added Spotify podcast support | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/SpotifyWeb.swift:28,49; SharedState.swift:38-40; NowPlayingSources.swift:467` | Spotify episode → podcast: show/episode names, mic glyph, ±15/30 s skips, episode link. The AppleScript path flags episodes too. |
+| 112 | Added additional AirPods Max colors | 🟡 Partial |  | `Sources/Isola/Modules/System/Bluetooth.swift:234` | Gen-1 codes 0x00/0x02/0x03/0x0F/0x11 tinted. USB-C AirPods Max colours (Midnight, Starlight, Blue, Purple, Orange): no source names their codes, untinted. |
 | 113 | Added spectrogram style options | ✅ Done | ✓ | `Sources/Isola/Modules/Media/MediaViews.swift:136` | Bars/Mirrored/Dots/Wave share one Shape for canned and live bands. Gallery media-style-*; self-check checks bounds. |
 | 114 | Added swipe down while expanded | ✅ Done | ✓ | `Sources/Isola/Island/Island.swift:160` | Swipe down while expanded cycles to the next live activity (middle click does the same). |
-| 115 | Added iCloud settings synchronization option | ⛔ Blocked |  |  | iCloud key-value sync needs an iCloud entitlement and provisioning profile; this build is ad-hoc signed. |
+| 115 | Added iCloud settings synchronization option | ✅ Done | ✓ | `Sources/Isola/Support/SettingsSync.swift:90; Sources/Isola/Modules/Settings/SettingsWindow.swift:195` | Settings sync through <iCloud Drive>/Isola/Settings.plist, per-key newest-wins; verified live with a local folder (write, merge, exclusions, placeholders). |
 | 116 | Added lock sound option | ✅ Done |  | `Sources/Isola/Modules/System/Lock.swift:27; lockSound` | Fires on real screenIsLocked; reuses unlock.wav at 0.6 volume, no distinct lock sound; off by default. |
 | 117 | Added disable expand while inactive option | ✅ Done | ✓ | `Sources/Isola/Island/Island.swift:198` | Island › Interaction toggle, default on; blocks tap, hover and swipe expand. Media counts as inactive while paused. |
 | 118 | Changed alerts to use system sounds instead | ✅ Done |  | `Sources/Isola/Support/Sounds.swift:17-22` | Battery, device and timer alerts use system Funk/Glass via NSSound(named:). |
@@ -185,7 +185,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 139 | Added controls (shuffle/repeat) | ✅ Done |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:102-103` | MediaRemote advance shuffle/repeat (commands 6/7) or AppleScript for Music/Spotify; state read back. |
 | 140 | Added podcast support | ✅ Done | ✓ | `Sources/Isola/Modules/Media/MediaViews.swift:576` | Apple Podcasts episodes get 15 s back / 30 s forward (relative seeks) instead of previous/next. |
 | 141 | Added live stream support | ✅ Done |  | `Sources/Isola/Modules/Media/MediaViews.swift:131-135,171-177` | duration <= 0 shows a red Live badge and a mic glyph in the peek. |
-| 142 | Added support for all AirPods Max colors (gen. 1) | ⬜ Missing |  |  | Same as #50. |
+| 142 | Added support for all AirPods Max colors (gen. 1) | 🔶 Built, unverified |  | `Sources/Isola/Modules/System/Bluetooth.swift:335` | 10 s BLE scan after a Lightning AirPods Max connects; five source codes paired to five gen-1 finishes (pairing is ours). Untested on hardware. |
 | 143 | Added album tap to focus active tab | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/MediaViews.swift:371` | Album tap runs the same open-source path (tab focus needs Automation consent). |
 | 144 | Added clamshell support | ✅ Done |  | `Sources/Isola/Island/IslandWindows.swift:81-83,95-97` | Screen-change refresh falls back to NSScreen.main when the built-in display disappears. |
 | 145 | Reworked onboarding | ✅ Done |  | `Sources/Isola/Modules/Settings/Onboarding.swift:12-13,146` | Welcome, permissions with live status, done; no Focus or Full Disk Access rows. |
