@@ -25,9 +25,6 @@ export default function Purchased({ params, search }: PageProps) {
   const lines = useRef<SVGPathElement[]>([]);
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
-  const href = code
-    ? `${DOWNLOAD_URL}?code=${encodeURIComponent(code)}`
-    : DOWNLOAD_URL;
 
   useEffect(() => {
     const controls = RECEIPT_LINES.flatMap((l, i) => {
@@ -135,7 +132,9 @@ export default function Purchased({ params, search }: PageProps) {
               <span className="relative top-px inline-block h-[13.5px] w-48 animate-pulse rounded-[0.1875rem] bg-orange-950/12.5" />
             )}
           </p>
-          <DownloadCard href={href} />
+          {/* The plain URL: the app never reads a key from it, and a key in it would end up in the
+              browser's history and the downloaded file's "where from". */}
+          <DownloadCard href={DOWNLOAD_URL} />
           <ContactNote>
             Having trouble downloading or installing? Please
           </ContactNote>

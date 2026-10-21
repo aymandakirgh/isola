@@ -87,8 +87,9 @@ const plane = (className: string) => (
   </svg>
 );
 
-/** Mini licence card that appears once the email has gone out. */
-function LicenseFound() {
+/** Mini licence card that appears once the request has gone out. The server answers the same for
+ *  every address, so the copy never says one was found. */
+function LicenseFound({ mail }: { mail: boolean }) {
   return (
     <>
       <div className="relative isolate h-14 w-20 rounded-[0.5625rem] p-0.75 shadow-md shadow-orange-900/20 outline-1 outline-orange-900/10 outline-solid">
@@ -143,12 +144,11 @@ function LicenseFound() {
           </div>
         </div>
       </div>
-      <div>
-        <p className="text-xl font-bold">License found!</p>
-        <p className="text-lg font-semibold text-orange-950/60">
-          Check your inbox.
-        </p>
-      </div>
+      <p className="text-lg leading-snug font-bold text-balance">
+        {mail
+          ? "If that address has a license, it’s on its way."
+          : "License e-mails aren’t set up on this demo yet."}
+      </p>
     </>
   );
 }
@@ -160,6 +160,7 @@ export default function Recover() {
   const [email, setEmail] = useState("");
   const [error, setError] = useState(false);
   const [sent, setSent] = useState(false);
+  const [mail, setMail] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const submit = async () => {
@@ -170,7 +171,11 @@ export default function Recover() {
     setError(false);
     setLoading(true);
     try {
-      if ((await requestLicenseEmail(email)).ok) return setSent(true);
+      const reply = await requestLicenseEmail(email);
+      if (reply.ok) {
+        setMail(reply.mail);
+        return setSent(true);
+      }
       setEmail("");
       fail();
     } catch {
@@ -231,7 +236,7 @@ export default function Recover() {
                   key="success"
                   className="flex flex-col items-center justify-between"
                 >
-                  <LicenseFound />
+                  <LicenseFound mail={mail} />
                 </div>
               ) : (
                 <div
