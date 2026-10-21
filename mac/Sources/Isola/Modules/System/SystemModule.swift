@@ -81,6 +81,13 @@ enum SystemModule {
                 Island.shared.post(BluetoothItems.connected(device, earbuds: kind.earbuds))
             }
         }
+        Debug.on("system.devicebattery") { a in
+            // A new level for a connected (or simulated) device, as the 10 s battery poll reads it.
+            let name = a["name"] ?? "AirPods Pro"
+            guard var device = DevicesState.shared.devices.first(where: { $0.name == name }) else { return }
+            device.battery = a["level"].flatMap(Double.init) ?? 0.15
+            BluetoothMonitor.shared.update(device)
+        }
         Debug.on("system.focus") { a in
             let name = a["name"] ?? "Work"
             // A known name keeps its mode id, so `name=Sleep` also plays the Sleep sound.

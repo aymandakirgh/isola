@@ -18,6 +18,7 @@ final class BluetoothMonitor: NSObject {
     private var profiling = false
     private var startedAt = Date.distantFuture
     private var timer: Timer?
+    private var ticks = 0
 
     func start() {
         startedAt = Date()
@@ -27,8 +28,9 @@ final class BluetoothMonitor: NSObject {
         }
         // Every paired device's model, so renamed AirPods are recognised as they connect.
         fetchProfiler()
-        // Battery levels drift; refresh them now and then.
-        timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { _ in
+        // Battery levels drift: re-read them every 10 s while something is connected, so a
+        // device crossing the warning level is announced within seconds.
+        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
             MainActor.assumeIsolated { BluetoothMonitor.shared.refreshBatteries() }
         }
     }
@@ -96,19 +98,29 @@ final class BluetoothMonitor: NSObject {
     }
 
     private func refreshBatteries() {
+        guard !DevicesState.shared.devices.isEmpty else { return }
+        ticks += 1
+        var unreported = false
         for case let d as IOBluetoothDevice in IOBluetoothDevice.pairedDevices() ?? [] where d.isConnected() {
             let id = Self.id(of: d)
             guard var device = DevicesState.shared.devices.first(where: { $0.id == id }) else { continue }
             let levels = Self.batteries(of: d)
-            guard let main = levels.main else { continue }
+            guard let main = levels.main else {
+                if device.battery != nil { unreported = true }
+                continue
+            }
             device.battery = main
             device.caseBattery = levels.case
             update(device)
         }
+        // Levels only system_profiler reports: refreshed once a minute (a 0.2 s run).
+        if unreported, ticks % 6 == 0 { fetchProfiler() }
     }
 
-    private func update(_ device: ConnectedDevice) {
-        guard let i = DevicesState.shared.devices.firstIndex(where: { $0.id == device.id }) else { return }
+    /// A fresh reading for a tracked device (also `system.devicebattery`).
+    func update(_ device: ConnectedDevice) {
+        guard let i = DevicesState.shared.devices.firstIndex(where: { $0.id == device.id }),
+              DevicesState.shared.devices[i] != device else { return }
         DevicesState.shared.devices[i] = device
         checkBattery(device, announce: true)
     }
