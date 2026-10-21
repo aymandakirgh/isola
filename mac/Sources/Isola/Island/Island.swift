@@ -22,6 +22,9 @@ final class Island {
     @ObservationIgnored private var transientTimer: Timer?
     @ObservationIgnored private var peekTimer: Timer?
     @ObservationIgnored private var hoverExpandTimer: Timer?
+    @ObservationIgnored private var restoreTimer: Timer?
+    /// Set when the user cycles while expanded: collapsing then returns to the most important activity.
+    @ObservationIgnored private var cycledWhileExpanded = false
 
     /// Live activities in rotation, most important first; swiped-away ones sit out.
     var sortedActivities: [IslandItem] {
@@ -81,7 +84,7 @@ final class Island {
     /// collapses if the newly shown item has nothing to expand into.
     private func show(_ id: String?) {
         activityIndex = id.flatMap { id in sortedActivities.firstIndex { $0.id == id } } ?? 0
-        if expanded, current?.expanded == nil { expanded = false }
+        if expanded, current?.expanded == nil { expanded = false; cycledWhileExpanded = false }
     }
 
     func end(_ id: String) {
@@ -113,6 +116,7 @@ final class Island {
     func cycle() {
         let list = sortedActivities
         guard list.count > 1 else { return }
+        if expanded { cycledWhileExpanded = true }
         let next = list[(activityIndex + 1) % list.count].id
         withAnimation(Springs.expand) { show(next) }
     }
@@ -158,9 +162,20 @@ final class Island {
     func setExpanded(_ on: Bool) {
         hoverExpandTimer?.invalidate()
         guard on != expanded, !(on && !canExpand) else { return }
+        restoreTimer?.invalidate()
         withAnimation(on ? Springs.openPanel : Springs.collapseActivity) {
             expanded = on
             if on { peeking = false; hovering = false }
+        }
+        if on { cycledWhileExpanded = false; return }
+        // Cycled while open: once collapsed, go back to the most important activity.
+        guard cycledWhileExpanded else { return }
+        cycledWhileExpanded = false
+        restoreTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.expanded else { return }
+                withAnimation(Springs.expand) { self.show(nil) }
+            }
         }
     }
 
@@ -257,7 +272,7 @@ final class Island {
 
     // MARK: - Self-check (`Isola --gallery`)
 
-    /// Swipe-up dismissal on a private instance.
+    /// Swipe-up dismissal and the restore after cycling, on a private instance.
     static func selfCheck() {
         let island = Island()
         func item(_ id: String, _ priority: Int, key: String? = nil) -> IslandItem {
@@ -274,5 +289,12 @@ final class Island {
         precondition(island.current?.id == "timer", "same content: still dismissed")
         island.update(item("music", 10, key: "song 2"))
         precondition(island.current?.id == "music", "new content: back, and it takes the island")
+        island.setExpanded(true)
+        island.cycle()
+        precondition(island.current?.id == "timer" && island.expanded, "cycling while expanded")
+        island.setExpanded(false)
+        precondition(island.current?.id == "timer", "the cycled item stays for a moment")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        precondition(island.current?.id == "music", "then the most important activity returns")
     }
 }
