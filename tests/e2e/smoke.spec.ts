@@ -31,6 +31,14 @@ for (const [path, heading] of ROUTES) {
   });
 }
 
+test("the download is the real DMG the card describes", async ({ page, request }) => {
+  const dmg = await request.head("/downloads/Isola.dmg");
+  expect(dmg.status()).toBe(200);
+  const megabytes = Math.floor(Number(dmg.headers()["content-length"]) / 1e6);
+  await page.goto("/download");
+  await expect(page.getByText(`DMG, ${megabytes}MB`)).toBeVisible();
+});
+
 test("unknown paths fall back to home", async ({ page }) => {
   await page.goto("/does-not-exist");
   await expect(page).toHaveURL(/\/$/);

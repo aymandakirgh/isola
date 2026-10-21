@@ -1,4 +1,5 @@
 // Metadata the site shows for the downloadable build (trial vs. licensed channel).
+// Both channels serve public/downloads/Isola.dmg (mac/scripts/build.sh); update size_bytes when it changes.
 export type Release = {
   version: string;
   build: number;
@@ -9,23 +10,17 @@ export type Release = {
 
 export const RELEASES: Record<"trial" | "stable", Release> = {
   trial: {
-    version: "1.4.6",
-    build: 148,
-    published_at: "2026-10-02T09:40:00.000Z",
-    assets: [
-      { name: "Isola.zip", size_bytes: 14_204_117 },
-      { name: "Isola.dmg", size_bytes: 14_961_532 },
-    ],
+    version: "1.4.7",
+    build: 151,
+    published_at: "2026-10-09T16:12:00.000Z",
+    assets: [{ name: "Isola.dmg", size_bytes: 3_821_069 }],
     minimum_system_version: "15",
   },
   stable: {
     version: "1.4.7",
     build: 151,
     published_at: "2026-10-09T16:12:00.000Z",
-    assets: [
-      { name: "Isola.zip", size_bytes: 14_388_920 },
-      { name: "Isola.dmg", size_bytes: 15_140_276 },
-    ],
+    assets: [{ name: "Isola.dmg", size_bytes: 3_821_069 }],
     minimum_system_version: "15 Sequoia",
   },
 };
