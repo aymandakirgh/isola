@@ -22,6 +22,8 @@ final class MediaPreferences {
     var liveWaveform: Bool = load("media.liveWaveform", false) { didSet { store.set(liveWaveform, forKey: "media.liveWaveform"); MediaController.shared.syncLevels() } }
     var grayscaleArtwork: Bool = load("media.grayscaleArtwork", false) { didSet { store.set(grayscaleArtwork, forKey: "media.grayscaleArtwork") } }
     var dimOnPause: Bool = load("media.dimOnPause", true) { didSet { store.set(dimOnPause, forKey: "media.dimOnPause") } }
+    /// A soft specular highlight on the artwork; in the player it follows the pointer.
+    var artworkGlare: Bool = load("media.artworkGlare", true) { didSet { store.set(artworkGlare, forKey: "media.artworkGlare") } }
     var hideNoteSymbol: Bool = load("media.hideNoteSymbol", false) { didSet { store.set(hideNoteSymbol, forKey: "media.hideNoteSymbol") } }
     var hideTitleExtras: Bool = load("media.hideTitleExtras", false) { didSet { store.set(hideTitleExtras, forKey: "media.hideTitleExtras") } }
     /// Seconds the activity lingers after pausing; -1 keeps it until the source stops.
@@ -46,6 +48,7 @@ final class MediaPreferences {
         case "liveWaveform": liveWaveform = on
         case "grayscaleArtwork": grayscaleArtwork = on
         case "dimOnPause": dimOnPause = on
+        case "artworkGlare": artworkGlare = on
         case "hideNoteSymbol": hideNoteSymbol = on
         case "hideTitleExtras": hideTitleExtras = on
         case "idleSeconds": idleSeconds = Double(value) ?? 120
@@ -75,6 +78,8 @@ final class MediaUI {
     var output = HUDOutput.preset("speakers")
     var volume: Double?
     var muted = false
+    /// Pointer over the expanded artwork (unit square) for the glare; nil leaves it at rest.
+    var glarePoint: UnitPoint?
 
     func refreshOutput() {
         output = SystemAudio.output()
@@ -372,6 +377,9 @@ enum MediaModule {
         let mutedUI = MediaUI()
         (mutedUI.offscreen, mutedUI.volumeOpen, mutedUI.output, mutedUI.volume, mutedUI.muted) = (true, true, .preset("homepod"), 0.4, true)
         Gallery.island("media-expanded-muted", item: MediaActivity.item(state: paused, ui: mutedUI), expanded: true)
+        let hoverUI = MediaUI()
+        (hoverUI.offscreen, hoverUI.glarePoint) = (true, UnitPoint(x: 0.78, y: 0.72))
+        Gallery.island("media-expanded-glare-hover", item: MediaActivity.item(state: other, ui: hoverUI), expanded: true)
         Gallery.add("media-progress-gradient", size: CGSize(width: 420, height: 48)) {
             ProgressScrubber(state: other, gradient: true, totalTime: true)
                 .padding(.horizontal, 22)

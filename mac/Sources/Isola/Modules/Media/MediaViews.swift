@@ -8,6 +8,10 @@ struct ArtworkImage: View {
     let image: NSImage?
     let size: CGFloat
     let radius: CGFloat
+    /// Where the specular highlight sits (unit square); nil draws none.
+    var glare: UnitPoint?
+    /// The glare at rest: light from the top left.
+    static let light = UnitPoint(x: 0.25, y: 0.12)
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -22,8 +26,45 @@ struct ArtworkImage: View {
             }
         }
         .frame(width: size, height: size)
+        .overlay {
+            if let glare {
+                RadialGradient(colors: [.white.opacity(0.32), .white.opacity(0)], center: .center, startRadius: 0, endRadius: size * 0.7)
+                    .frame(width: size * 1.4, height: size * 1.4)
+                    .position(x: glare.x * size, y: glare.y * size)
+                    .blendMode(.plusLighter)
+                    .animation(.easeOut(duration: 0.3), value: glare)
+            }
+        }
         .clipShape(shape)
         .overlay(shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
+    }
+}
+
+/// Reports the pointer over its view in unit coordinates, nil once it leaves. An `.activeAlways`
+/// tracking area, so it keeps working while Isola isn't the active app.
+private struct PointerTracker: NSViewRepresentable {
+    let onMove: (UnitPoint?) -> Void
+
+    func makeNSView(context: Context) -> TrackingView { TrackingView() }
+    func updateNSView(_ view: TrackingView, context: Context) { view.onMove = onMove }
+
+    final class TrackingView: NSView {
+        var onMove: ((UnitPoint?) -> Void)?
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            for area in trackingAreas { removeTrackingArea(area) }
+            addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func mouseMoved(with event: NSEvent) {
+            let p = convert(event.locationInWindow, from: nil)
+            onMove?(UnitPoint(x: p.x / bounds.width, y: 1 - p.y / bounds.height))
+        }
+
+        override func mouseExited(with event: NSEvent) { onMove?(nil) }
     }
 }
 
@@ -70,7 +111,7 @@ struct WingArtwork: View {
     var body: some View {
         let prefs = MediaPreferences.shared
         let island = Island.shared
-        ArtworkImage(image: state.artwork, size: 22, radius: 6)
+        ArtworkImage(image: state.artwork, size: 22, radius: 6, glare: prefs.artworkGlare ? ArtworkImage.light : nil)
             .grayscale(prefs.grayscaleArtwork ? 1 : 0)
             .opacity(!state.isPlaying && prefs.dimOnPause ? 0.6 : 1)
             .scaleEffect(state.isPlaying ? 1 : 0.85)
@@ -479,6 +520,22 @@ private struct CopyLinkButton: View {
     }
 }
 
+/// The expanded artwork; its glare follows the pointer while hovering.
+private struct PlayerArtwork: View {
+    let state: NowPlayingState
+    let ui: MediaUI
+
+    var body: some View {
+        let prefs = MediaPreferences.shared
+        ArtworkImage(image: state.artwork, size: 58, radius: 12, glare: prefs.artworkGlare ? ui.glarePoint ?? ArtworkImage.light : nil)
+            .grayscale(prefs.grayscaleArtwork ? 1 : 0)
+            .opacity(!state.isPlaying && prefs.dimOnPause ? 0.7 : 1)
+            .scaleEffect(state.isPlaying ? 1 : 0.94)
+            .animation(.easeInOut(duration: 0.4), value: state.isPlaying)
+            .overlay { if prefs.artworkGlare, !ui.offscreen { PointerTracker { ui.glarePoint = $0 } } }
+    }
+}
+
 struct ExpandedPlayer: View {
     let state: NowPlayingState
     let ui: MediaUI
@@ -487,11 +544,7 @@ struct ExpandedPlayer: View {
         let prefs = MediaPreferences.shared
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 14) {
-                ArtworkImage(image: state.artwork, size: 58, radius: 12)
-                    .grayscale(prefs.grayscaleArtwork ? 1 : 0)
-                    .opacity(!state.isPlaying && prefs.dimOnPause ? 0.7 : 1)
-                    .scaleEffect(state.isPlaying ? 1 : 0.94)
-                    .animation(.easeInOut(duration: 0.4), value: state.isPlaying)
+                PlayerArtwork(state: state, ui: ui)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(displayTitle(state)).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
@@ -602,6 +655,10 @@ struct MediaSettingsView: View {
                 .disabled(!prefs.focusReplace)
                 Toggle("Dim artwork when paused", isOn: $prefs.dimOnPause)
                 Toggle("Grayscale artwork", isOn: $prefs.grayscaleArtwork)
+                Toggle(isOn: $prefs.artworkGlare) {
+                    Text("Artwork glare")
+                    Text("A soft highlight on the cover that follows the pointer in the player.")
+                }
                 Toggle("Hide note symbol", isOn: $prefs.hideNoteSymbol)
                 Toggle(isOn: $prefs.hideTitleExtras) {
                     Text("Hide title extras")
