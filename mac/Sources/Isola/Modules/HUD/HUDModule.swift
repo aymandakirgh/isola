@@ -126,6 +126,8 @@ final class HUDModel {
     static let shared = HUDModel()
     var snapshot = HUDSnapshot()
     var accessibilityTrusted = AXIsProcessTrusted()
+    /// Rubber band from pushing past 0% or 100%: 1 fully stretched, 0 at rest.
+    var stretch: Double = 0
 }
 
 @MainActor
@@ -211,6 +213,7 @@ enum HUDModule {
             if key == .volumeUp, SystemAudio.isMuted() { SystemAudio.setMuted(false) }
             SystemAudio.setVolume(level)
             showVolume(level: level, muted: SystemAudio.isMuted())
+            if level == current { rubberBand() }  // already at 0% or 100%
             return true
         case .mute:
             if down {
@@ -224,7 +227,18 @@ enum HUDModule {
             let level = stepped(current, up: key == .brightnessUp, fine: fine)
             DisplayBrightness.set(screen.displayID, level)
             show(HUDSnapshot(kind: .brightness, level: level, displayName: screen.isBuiltIn ? "Built-in Display" : screen.localizedName))
+            if level == current { rubberBand() }
             return true
+        }
+    }
+
+    /// Pushing past 0% or 100% stretches the bar toward the push and lets it spring back,
+    /// only with the island's Overshoot on (`stepped` lands on the same level only there).
+    private static func rubberBand() {
+        guard Preferences.shared.overshoot else { return }
+        withAnimation(.easeOut(duration: 0.08)) { HUDModel.shared.stretch = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            withAnimation(Springs.spring(300, 9)) { HUDModel.shared.stretch = 0 }
         }
     }
 
@@ -240,13 +254,16 @@ enum HUDModule {
 
     private static func registerDebug() {
         // Simulated: shows the HUD without touching the real volume or brightness.
+        // `push=1` also plays the rubber band, as a key press at 0% or 100% does.
         Debug.on("hud.volume") { args in
             let level = args["level"].flatMap(Double.init) ?? 0.5
             let output = args["device"].map(HUDOutput.preset) ?? HUDOutput.preset("speakers")
             show(HUDSnapshot(kind: .volume, level: level, muted: args["muted"] == "1", decibels: HUDOutput.approximateDecibels(level), output: output))
+            if args["push"] == "1" { rubberBand() }
         }
         Debug.on("hud.brightness") { args in
             show(HUDSnapshot(kind: .brightness, level: args["level"].flatMap(Double.init) ?? 0.6))
+            if args["push"] == "1" { rubberBand() }
         }
     }
 
@@ -269,9 +286,13 @@ enum HUDModule {
     static func gallery() {
         selfCheck()
         registerSettings()
-        func add(_ name: String, _ s: HUDSnapshot, _ look: HUDLook = HUDLook(), geometry: NotchGeometry = .pillPreview) {
-            var item = IslandItem(id: "hud", kind: .hud) { HUDPart(part: .leading, s: s, look: look) } trailing: { HUDPart(part: .trailing, s: s, look: look) }
-            if look.labels { item = item.peek(always: true) { HUDPart(part: .label, s: s, look: look) } }
+        func add(_ name: String, _ s: HUDSnapshot, _ look: HUDLook = HUDLook(), geometry: NotchGeometry = .pillPreview, stretch: Double = 0) {
+            var item = IslandItem(id: "hud", kind: .hud) {
+                HUDPart(part: .leading, s: s, look: look)
+            } trailing: {
+                HUDPart(part: .trailing, s: s, look: look, stretch: stretch)
+            }
+            if look.labels { item = item.peek(always: true) { HUDPart(part: .label, s: s, look: look, stretch: stretch) } }
             Gallery.island("hud-\(name)", item: item, geometry: geometry)
         }
         func volume(_ level: Double, muted: Bool = false, device: String = "speakers") -> HUDSnapshot {
@@ -295,6 +316,10 @@ enum HUDModule {
         add("brightness-low", HUDSnapshot(kind: .brightness, level: 0.2))
         add("brightness-display-symbol", HUDSnapshot(kind: .brightness, level: 0.55), HUDLook(displaySymbol: true))
         add("brightness-compact-notch", HUDSnapshot(kind: .brightness, level: 0.7), compact, geometry: .notchPreview)
+        // Peak of the rubber band when pushing past the ends.
+        add("overshoot-volume-max", volume(1), stretch: 1)
+        add("overshoot-volume-min-compact", volume(0), compact, stretch: 1)
+        add("overshoot-brightness-max-compact-notch", HUDSnapshot(kind: .brightness, level: 1), compact, geometry: .notchPreview, stretch: 1)
         snapshotSettings()
     }
 

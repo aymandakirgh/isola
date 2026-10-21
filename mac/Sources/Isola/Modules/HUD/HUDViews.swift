@@ -6,8 +6,16 @@ struct HUDPart: View {
     let part: Part
     let s: HUDSnapshot
     let look: HUDLook
+    /// Rubber band past 0% / 100% (`HUDModel.stretch`).
+    var stretch: Double = 0
 
     private var silent: Bool { s.kind == .volume && (s.muted || s.level <= 0) }
+
+    /// Stretched toward the push (right at the top, left at the bottom) and a little thinner;
+    /// `amount` is the width gained at full stretch, so short and long bars move alike.
+    private func rubberBand(_ bar: some View, amount: CGFloat) -> some View {
+        bar.scaleEffect(x: 1 + amount * stretch, y: 1 - 0.3 * stretch, anchor: s.level >= 0.5 ? .leading : .trailing)
+    }
 
     var body: some View {
         switch part {
@@ -52,7 +60,7 @@ struct HUDPart: View {
     }
 
     @ViewBuilder private var value: some View {
-        let bar = LevelBar(value: s.level, tint: silent ? Palette.muted : Palette.ink, height: 5).frame(width: 26).opacity(silent ? 0.45 : 1)
+        let bar = rubberBand(LevelBar(value: s.level, tint: silent ? Palette.muted : Palette.ink, height: 5).frame(width: 26), amount: 0.25).opacity(silent ? 0.45 : 1)
         if silent, look.style != .bar {
             valueText("Mute")
         } else if look.style == .decibels, s.kind == .volume {
@@ -73,7 +81,7 @@ struct HUDPart: View {
                 .lineLimit(1)
                 .frame(maxWidth: 74, alignment: .leading)
                 .fixedSize(horizontal: true, vertical: false)
-            LevelBar(value: s.level, tint: silent ? Palette.muted : Palette.ink, height: 5)
+            rubberBand(LevelBar(value: s.level, tint: silent ? Palette.muted : Palette.ink, height: 5), amount: 0.07)
                 .opacity(silent ? 0.45 : 1)
         }
         .padding(.horizontal, 14)
@@ -86,7 +94,7 @@ struct HUDPart: View {
 struct LiveHUD: View {
     let part: HUDPart.Part
     var body: some View {
-        HUDPart(part: part, s: HUDModel.shared.snapshot, look: HUDPreferences.shared.look)
+        HUDPart(part: part, s: HUDModel.shared.snapshot, look: HUDPreferences.shared.look, stretch: HUDModel.shared.stretch)
     }
 }
 
