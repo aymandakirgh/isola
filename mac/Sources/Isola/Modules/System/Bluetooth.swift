@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreBluetooth
 import IOBluetooth
 import SwiftUI
 
@@ -19,6 +20,13 @@ final class BluetoothMonitor: NSObject {
     private var startedAt = Date.distantFuture
     private var timer: Timer?
     private var ticks = 0
+    /// Colours read from AirPods Max advertisements, by device id (kept for reconnections).
+    private var tints: [String: NSColor] = [:]
+    private var central: CBCentralManager?
+    /// The AirPods Max a colour scan listens for, and the colour codes heard per peripheral.
+    private var scanTarget: ConnectedDevice?
+    private var heardColors: [UUID: UInt8] = [:]
+    private var scanTimer: Timer?
 
     func start() {
         startedAt = Date()
@@ -56,8 +64,11 @@ final class BluetoothMonitor: NSObject {
             disconnectNotes[id] = d.register(forDisconnectNotification: self, selector: #selector(disconnected(_:device:)))
         }
         let levels = Self.batteries(of: d)
-        let device = ConnectedDevice(id: id, name: d.name ?? "Bluetooth device", symbol: kind.symbol, battery: levels.main, caseBattery: levels.case)
+        let device = ConnectedDevice(
+            id: id, name: d.name ?? "Bluetooth device", symbol: kind.symbol, battery: levels.main, caseBattery: levels.case, tint: tints[id]
+        )
         connect(device, earbuds: kind.earbuds, announce: announce)
+        lookUpColor(device, productID: productID)
         // Paired after launch, or levels IOBluetooth won't give: ask system_profiler.
         if productID == nil || levels.main == nil { fetchProfiler() }
     }
@@ -209,6 +220,37 @@ final class BluetoothMonitor: NSObject {
         0x202F: (["beats.fitpro", "beats.earphones"], true),  // Powerbeats Fit
     ]
 
+    /// The one model whose colour codes a source names: AirPods Max (Lightning).
+    nonisolated static let colorModel = 0x200A
+
+    /// Its colour codes: the label an iPhone's pairing card showed for each, from the
+    /// `colors_airpods_max` table of Flipper Zero's BLE spam app (Willy-JL;
+    /// github.com/Next-Flip/Momentum-Apps, ble_spam/protocols/continuity.c, same table in
+    /// simondankelmann/Bluetooth-LE-Spam), then the gen-1 finish we pair it with (five codes,
+    /// five finishes; the pairing is ours). 0x0F and 0x03 were also captured from real AirPods
+    /// Max (CAPod's AirPodsMaxTest, github.com/d4rken-org/capod; OpenPods issue #124). Codes
+    /// are per model (the USB-C AirPods Max sent 0x12, which no source names), so every other
+    /// model stays untinted. Tints: the finishes, light enough to read on black.
+    nonisolated static let maxColors: [UInt8: (label: String, finish: String, tint: NSColor)] = [
+        0x00: ("White", "Silver", NSColor(srgbRed: 0.88, green: 0.89, blue: 0.91, alpha: 1)),
+        0x02: ("Red", "Pink", NSColor(srgbRed: 1, green: 0.62, blue: 0.62, alpha: 1)),
+        0x03: ("Blue", "Sky Blue", NSColor(srgbRed: 0.6, green: 0.78, blue: 0.96, alpha: 1)),
+        0x0F: ("Black", "Space Gray", NSColor(srgbRed: 0.66, green: 0.67, blue: 0.71, alpha: 1)),
+        0x11: ("Light Green", "Green", NSColor(srgbRed: 0.74, green: 0.85, blue: 0.71, alpha: 1)),
+    ]
+
+    /// A colour code as a tint; nil unless a source names that code for that model.
+    nonisolated static func tint(model: Int, color: UInt8) -> NSColor? {
+        model == colorModel ? maxColors[color]?.tint : nil
+    }
+
+    /// `color=` of the `system.bluetooth` simulation: a code (`0x02`), label (`red`) or finish (`pink`).
+    nonisolated static func maxTint(_ arg: String) -> NSColor? {
+        func squash(_ s: String) -> String { s.lowercased().replacingOccurrences(of: " ", with: "") }
+        let code = UInt8(squash(arg).replacingOccurrences(of: "0x", with: ""), radix: 16)
+        return maxColors.first { $0.key == code || [$0.value.label, $0.value.finish].map(squash).contains(squash(arg)) }?.value.tint
+    }
+
     /// Best effort: Apple accessories expose battery percentages on IOBluetoothDevice (private keys).
     nonisolated static func batteries(of d: IOBluetoothDevice) -> (main: Double?, case: Double?) {
         func read(_ key: String) -> Double? {
@@ -246,6 +288,7 @@ final class BluetoothMonitor: NSObject {
 
     private func received(_ entries: [String: ProfilerEntry]) {
         profiling = false
+        let known = productIDs
         for (key, entry) in entries { if let id = entry.productID { productIDs[key] = id } }
         for var device in DevicesState.shared.devices {
             guard let entry = entries[Self.key(device.id)] else { continue }
@@ -255,6 +298,8 @@ final class BluetoothMonitor: NSObject {
                 device.caseBattery = entry.case
             }
             update(device)
+            // Its model only just became known (connected at launch, or paired since).
+            if known[Self.key(device.id)] == nil { lookUpColor(device, productID: entry.productID) }
         }
     }
 
@@ -281,6 +326,126 @@ final class BluetoothMonitor: NSObject {
         }
         return result
     }
+
+    // MARK: - Colour
+
+    /// AirPods Max tell their colour only in their BLE advertisement: listen ~10 s after one
+    /// connects, one at a time. Only with Bluetooth access already granted: a CBCentralManager
+    /// created while access is undecided would show the permission prompt.
+    private func lookUpColor(_ device: ConnectedDevice, productID: Int?) {
+        guard productID == Self.colorModel, tints[device.id] == nil, scanTarget == nil,
+              CBManager.authorization == .allowedAlways else { return }
+        scanTarget = device
+        heardColors = [:]
+        if let central {
+            scan(central)
+        } else {
+            central = CBCentralManager(delegate: self, queue: .main, options: [CBCentralManagerOptionShowPowerAlertKey: false])
+        }
+        scanTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { _ in
+            MainActor.assumeIsolated { BluetoothMonitor.shared.endScan() }
+        }
+    }
+
+    private func scan(_ central: CBCentralManager) {
+        guard scanTarget != nil, central.state == .poweredOn, !central.isScanning else { return }
+        central.scanForPeripherals(withServices: nil)
+    }
+
+    private func heard(_ ad: ProximityPairing, from peripheral: UUID, named name: String?) {
+        guard let target = scanTarget, ad.model == Self.colorModel else { return }
+        heardColors[peripheral] = ad.color
+        // A peripheral carrying the connected device's name is taken to be it (AirBattery
+        // reads AirPods adverts by peripheral name too).
+        if name == target.name { endScan(color: ad.color) }
+    }
+
+    /// Keeps the named device's colour, else the one every AirPods Max heard agreed on
+    /// (another one nearby in a different colour leaves the glyph untinted).
+    private func endScan(color: UInt8? = nil) {
+        scanTimer?.invalidate()
+        central?.stopScan()
+        let target = scanTarget, codes = Set(heardColors.values)
+        scanTarget = nil
+        heardColors = [:]
+        guard let target, let code = color ?? (codes.count == 1 ? codes.first : nil),
+              let tint = Self.tint(model: Self.colorModel, color: code) else { return }
+        tints[target.id] = tint
+        guard var device = DevicesState.shared.devices.first(where: { $0.id == target.id }) else { return }
+        device.tint = tint
+        update(device)
+    }
+}
+
+extension BluetoothMonitor: CBCentralManagerDelegate {
+    nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        MainActor.assumeIsolated { scan(central) }
+    }
+
+    nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        guard let data = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data, let ad = ProximityPairing(data) else { return }
+        let id = peripheral.identifier, name = peripheral.name
+        MainActor.assumeIsolated { heard(ad, from: id, named: name) }
+    }
+}
+
+/// Apple's "proximity pairing" BLE advertisement, broadcast by AirPods and Beats in use.
+/// Manufacturer data as CoreBluetooth hands it over, laid out per furiousMAC/continuity
+/// (github.com/furiousMAC/continuity, messages/proximity_pairing.md and its Wireshark
+/// dissector), AirBattery (github.com/lihaoyun6/AirBattery, BatteryInfo/BLEBattery.swift)
+/// and OpenPods (github.com/adolfintel/OpenPods, pods/PodsStatus.java):
+///
+///     0-1  4C 00  Apple's company ID          7   status
+///     2    07     proximity pairing           8   pod batteries, a nibble each
+///     3    19     25 bytes follow             9   charging flags | case battery (low nibble)
+///     4    01     a paired device's status    10  lid open counter
+///     5-6  0A 20  model, little-endian:       11  colour
+///                 product ID 0x200A           12-28  not read (13-28 encrypted)
+///
+/// Batteries are tens of percent, 0xF when unknown; with status bit 5 clear the high nibble
+/// is the left pod (OpenPods' isFlipped). Single-cell headphones such as the AirPods Max put
+/// their level in the low nibble, so it lands in `left` or `right` and the other reads 0.
+struct ProximityPairing {
+    var model: Int
+    var color: UInt8
+    var left: Double?
+    var right: Double?
+    var `case`: Double?
+
+    init?(_ data: Data) {
+        let b = [UInt8](data)
+        // Pods also send type-07 frames with other prefixes in another format (CAPod #603).
+        guard b.count >= 29, b.starts(with: [0x4C, 0x00, 0x07, 0x19, 0x01]) else { return nil }
+        func level(_ nibble: UInt8) -> Double? { nibble == 0xF ? nil : min(1, Double(nibble) / 10) }
+        let flipped = b[7] & 0x20 == 0
+        model = Int(b[5]) | Int(b[6]) << 8
+        color = b[11]
+        left = level(flipped ? b[8] >> 4 : b[8] & 0xF)
+        right = level(flipped ? b[8] & 0xF : b[8] >> 4)
+        self.case = level(b[9] & 0xF)
+    }
+
+    /// Canned advertisements from the sources; runs with every gallery render.
+    static func selfCheck() {
+        func ad(_ hex: String) -> ProximityPairing? { ProximityPairing(Data(hex.split(separator: " ").map { UInt8($0, radix: 16)! })) }
+        // Real AirPods Max (Lightning) captures, CAPod's AirPodsMaxTest ("some dude at the gym"; OpenPods #124).
+        let blue = ad("4C 00 07 19 01 0A 20 23 07 80 03 03 65 1F 28 32 D0 D9 71 43 00 9A 40 E7 6B EA 6C 2C FB")
+        precondition(blue?.model == 0x200A && blue?.color == 0x03 && blue?.left == 0.7 && blue?.right == 0, "AirPods Max, level in the low nibble")
+        precondition(blue.flatMap { BluetoothMonitor.tint(model: $0.model, color: $0.color) } == BluetoothMonitor.maxColors[0x03]?.tint, "AirPods Max colour tints")
+        let gray = ad("4C 00 07 19 01 0A 20 62 04 80 01 0F 40 0D 70 50 16 F2 40 83 16 BF 10 16 34 9B 74 84 E8")
+        precondition(gray?.color == 0x0F && gray?.left == 0.4 && BluetoothMonitor.tint(model: 0x200A, color: 0x0F) != nil, "AirPods Max 0x0F")
+        // AirPods Pro (CAPod's AirPodsProTest): 0x00 is a colour only for the AirPods Max.
+        let pro = ad("4C 00 07 19 01 0E 20 54 AA B5 31 00 00 E0 0C A7 8A 60 4B D3 7D F4 60 4F 2C 73 E9 A7 F4")
+        precondition(pro?.model == 0x200E && pro?.color == 0 && pro?.left == 1 && pro?.right == 1 && pro?.case == 0.5, "AirPods Pro")
+        precondition(pro.flatMap { BluetoothMonitor.tint(model: $0.model, color: $0.color) } == nil, "codes are per model: no tint")
+        let flipped = ad("4C 00 07 19 01 0E 20 00 F3 8F 02 00 04 79 C6 3F F9 C3 15 D9 11 A1 3C B1 58 66 B9 8B 67")
+        precondition(flipped?.left == nil && flipped?.right == 0.3 && flipped?.case == nil, "flipped pods; 0xF is unknown")
+        // Cut short, and AppleJuice's spoofed new-device pop-up (prefix 07).
+        precondition(ad("4C 00 07 19 01 0A 20 23 07 80 03 03") == nil, "too short")
+        precondition(ad("4C 00 07 19 07 0A 20 75 AA 30 01 00 00 45 12 12 12 00 00 00 00 00 00 00 00 00 00 00 00") == nil, "other prefix")
+        precondition(BluetoothMonitor.maxTint("pink") == BluetoothMonitor.maxTint("red") && BluetoothMonitor.maxTint("0x02") == BluetoothMonitor.maxColors[0x02]?.tint
+            && BluetoothMonitor.maxTint("Sky Blue") != nil && BluetoothMonitor.maxTint("purple") == nil, "debug colour names")
+    }
 }
 
 @MainActor
@@ -290,7 +455,7 @@ enum BluetoothItems {
             if earbuds, EarbudsVideo.url != nil, !SystemModule.renderingGallery {
                 EarbudsVideo().frame(width: 32, height: 32).padding(.leading, 6).padding(.bottom, 2)
             } else {
-                BouncingSymbol(name: DeviceSymbol.resolve(device.symbol), size: 17).padding(.leading, 11)
+                DeviceGlyph(device: device).padding(.leading, 11)
             }
         } trailing: {
             Group {
@@ -326,6 +491,18 @@ enum BluetoothItems {
     /// "AirPods Pro · 76%" (the case level lives in DevicesState for the Lock Screen widget).
     static func caption(_ d: ConnectedDevice) -> String {
         [d.name, d.battery.map(PowerItems.percent)].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// The connect notification's glyph, in the device's colour. Read live: the colour comes from
+/// a BLE scan that can finish after the notification shows.
+private struct DeviceGlyph: View {
+    let device: ConnectedDevice
+
+    var body: some View {
+        let tint = DevicesState.shared.devices.first { $0.id == device.id }?.tint ?? device.tint
+        BouncingSymbol(name: DeviceSymbol.resolve(device.symbol), color: tint.map { Color(nsColor: $0) } ?? Palette.ink, size: 17)
+            .animation(.easeInOut(duration: 0.4), value: tint)
     }
 }
 
