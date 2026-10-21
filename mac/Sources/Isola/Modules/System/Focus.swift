@@ -47,6 +47,7 @@ final class FocusMonitor {
         if let mode {
             state.name = mode.name
             state.symbol = mode.symbol
+            state.tint = mode.tint
         }
         if announce, SystemPreferences.shared.focusNotification, let shown = mode ?? previous {
             Island.shared.post(FocusItems.changed(shown, on: mode != nil))

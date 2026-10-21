@@ -159,20 +159,40 @@ struct Spectrogram: View {
     }
 }
 
+/// The Focus symbol in its colour, standing in for the spectrogram.
+struct FocusWingSymbol: View {
+    let focus: FocusState
+
+    var body: some View {
+        Image(systemName: DeviceSymbol.resolve(focus.symbol, fallback: "moon.fill"))
+            .islandSymbol(14)
+            .foregroundStyle(Color(nsColor: focus.tint))
+    }
+}
+
 struct MediaTrailing: View {
     let state: NowPlayingState
+    var focus = FocusState.shared
 
     var body: some View {
         let prefs = MediaPreferences.shared
-        if prefs.spectrogram {
-            let levels = AudioLevels.shared
-            Spectrogram(state: state, style: prefs.spectrogramStyle, bands: prefs.liveWaveform && levels.live ? levels.bands : nil)
-        } else {
-            Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(Palette.ink.opacity(0.85))
-                .frame(width: 20, height: 20)
+        let showsFocus = prefs.focusReplace && focus.active && (prefs.focusMode.isEmpty || prefs.focusMode == focus.name)
+        ZStack {
+            if showsFocus {
+                FocusWingSymbol(focus: focus).transition(.blurReplace)
+            } else if prefs.spectrogram {
+                let levels = AudioLevels.shared
+                Spectrogram(state: state, style: prefs.spectrogramStyle, bands: prefs.liveWaveform && levels.live ? levels.bands : nil)
+                    .transition(.blurReplace)
+            } else {
+                Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Palette.ink.opacity(0.85))
+                    .transition(.blurReplace)
+            }
         }
+        .frame(width: 20, height: 20)
+        .animation(.easeInOut(duration: 0.45), value: showsFocus)
     }
 }
 
@@ -465,6 +485,14 @@ struct ExpandedPlayer: View {
 struct MediaSettingsView: View {
     @Bindable var prefs = MediaPreferences.shared
 
+    /// The built-in modes, plus the saved choice and whichever Focus is on (custom modes are
+    /// only known once seen, and only with Full Disk Access).
+    private var focusModes: [String] {
+        let focus = FocusState.shared
+        let names = FocusMonitor.known.values.map(\.name) + [prefs.focusMode] + (focus.active ? [focus.name] : [])
+        return Set(names).filter { !$0.isEmpty }.sorted()
+    }
+
     private var sourceDescription: String {
         switch NowPlayingSources.shared.source {
         case .mediaRemote: "System (MediaRemote)"
@@ -488,6 +516,15 @@ struct MediaSettingsView: View {
                     Text("Bars follow the audio that's playing, at about 1% CPU. macOS asks for System Audio Recording access the first time.")
                 }
                 .disabled(!prefs.spectrogram)
+                Toggle(isOn: $prefs.focusReplace) {
+                    Text("Replace spectrogram with Focus")
+                    Text("While the chosen Focus is on, the wing shows its symbol in its colour.")
+                }
+                Picker("Focus", selection: $prefs.focusMode) {
+                    Text("Any Focus").tag("")
+                    ForEach(focusModes, id: \.self) { Text($0).tag($0) }
+                }
+                .disabled(!prefs.focusReplace)
                 Toggle("Dim artwork when paused", isOn: $prefs.dimOnPause)
                 Toggle("Grayscale artwork", isOn: $prefs.grayscaleArtwork)
                 Toggle("Hide note symbol", isOn: $prefs.hideNoteSymbol)

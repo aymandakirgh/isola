@@ -98,6 +98,7 @@ final class FocusState {
     var active = false
     var name = ""
     var symbol = "moon.fill"
+    var tint: NSColor = .systemIndigo
 }
 
 @MainActor @Observable

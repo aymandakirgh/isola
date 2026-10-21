@@ -14,6 +14,9 @@ final class MediaPreferences {
     var spectrogramStyle: SpectrogramStyle = SpectrogramStyle(rawValue: store.string(forKey: "media.spectrogramStyle") ?? "") ?? .bars {
         didSet { store.set(spectrogramStyle.rawValue, forKey: "media.spectrogramStyle") }
     }
+    /// While this Focus is on (`focusMode`, "" for any), the wing shows its symbol instead of the spectrogram.
+    var focusReplace: Bool = load("media.focusReplace", false) { didSet { store.set(focusReplace, forKey: "media.focusReplace") } }
+    var focusMode: String = load("media.focusMode", "") { didSet { store.set(focusMode, forKey: "media.focusMode") } }
     /// Bars follow the real audio (system audio tap) instead of a canned animation.
     var liveWaveform: Bool = load("media.liveWaveform", false) { didSet { store.set(liveWaveform, forKey: "media.liveWaveform"); MediaController.shared.syncLevels() } }
     var grayscaleArtwork: Bool = load("media.grayscaleArtwork", false) { didSet { store.set(grayscaleArtwork, forKey: "media.grayscaleArtwork") } }
@@ -35,6 +38,8 @@ final class MediaPreferences {
         switch key {
         case "spectrogram": spectrogram = on
         case "spectrogramStyle": spectrogramStyle = SpectrogramStyle(rawValue: value) ?? .bars
+        case "focusReplace": focusReplace = on
+        case "focusMode": focusMode = value == "any" ? "" : value
         case "liveWaveform": liveWaveform = on
         case "grayscaleArtwork": grayscaleArtwork = on
         case "dimOnPause": dimOnPause = on
@@ -291,6 +296,14 @@ enum MediaModule {
         Gallery.island("media-compact-playing", item: MediaActivity.item(state: playing, ui: ui))
         Gallery.island("media-compact-paused", item: MediaActivity.item(state: paused, ui: ui))
         Gallery.island("media-compact-playing-notch", item: MediaActivity.item(state: playing, ui: ui), geometry: .notchPreview)
+        let focus = FocusState()
+        (focus.active, focus.name, focus.symbol, focus.tint) = (true, "Work", "briefcase.fill", .systemTeal)
+        let focusItem = IslandItem(id: "media", kind: .liveActivity) {
+            WingArtwork(state: playing, ui: ui).padding(.leading, 9)
+        } trailing: {
+            FocusWingSymbol(focus: focus).frame(width: 20, height: 20).padding(.trailing, 9)
+        }
+        Gallery.island("media-focus", item: focusItem)
         // Each spectrogram style, animated and with fixed bass-heavy "live" bands.
         let variants: [(String, [Float]?)] = [("", nil), ("-live", [0.95, 0.6, 0.35, 0.15])]
         for style in SpectrogramStyle.allCases {
@@ -321,7 +334,7 @@ enum MediaModule {
                 .background(Color.black)
         }
         // Entries named "*settings" are snapshotted through a hosting view by the core gallery.
-        Gallery.add("media-settings", size: CGSize(width: 520, height: 560)) {
+        Gallery.add("media-settings", size: CGSize(width: 520, height: 940)) {
             MediaSettingsView().background(Color(nsColor: .windowBackgroundColor))
         }
     }
