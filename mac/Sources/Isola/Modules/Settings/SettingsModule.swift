@@ -22,6 +22,10 @@ enum SettingsModule {
         }
         Debug.on("license.set") { License.shared.activate($0["key"] ?? "") }
         Debug.on("license.reset") { _ in License.shared.reset() }
+        Debug.on("license.state") { _ in
+            let l = License.shared
+            Debug.reply("key=\(l.key ?? "none") server=\(l.serverStatus) registered=\(l.registered) devices=\(l.devices.count)")
+        }
         Debug.on("update.check") { _ in Updates.shared.check() }
         Debug.on("update.prompt") { a in
             var release = Updates.sample
@@ -236,6 +240,9 @@ enum SettingsGallery {
         license.preview(key: License.makeKey(seed: 7), devices: [me, studio], firstLaunch: Date().addingTimeInterval(-300 * hour))
         Updates.shared.preview(Updates.sample, checked: Date().addingTimeInterval(-2 * hour))
         window("settings-license-licensed", section: "license")
+        license.preview(key: License.makeKey(seed: 7), devices: [me, studio], firstLaunch: Date().addingTimeInterval(-300 * hour),
+                        message: "Couldn’t reach the license server. Try again when you’re online.", serverStatus: "offline")
+        window("settings-license-offline", section: "license")
 
         for step in OnboardingModel.Step.allCases {
             let model = OnboardingModel()

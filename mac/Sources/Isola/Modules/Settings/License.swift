@@ -9,20 +9,28 @@ struct LicensedMac: Identifiable, Codable, Equatable {
     var activated: Date
 }
 
-/// Trial + licence state. Mirrors the website's mock licensing: keys are validated
-/// locally (format + checksum) and up to three Macs can be activated.
+/// Trial + licence state. Keys are checked here (format + checksum), then registered with the
+/// website's licence server (api/license.ts), which keeps each key's Macs, up to three. When the
+/// server can't be reached or fails, the local check and the last known list stand in: an outage
+/// never takes a licence away, while a definite answer from the server (4xx) does.
 @MainActor @Observable
 final class License {
     static let shared = License()
     static let trialLength: TimeInterval = 72 * 3600
     static let deviceLimit = 3
     static let website = URL(string: "https://isola-ruby.vercel.app")!
-    /// Key handed out by the website's demo checkout (/purchased/demo).
+    /// The licence server: <api>/activate, <api>/devices and <api>/deactivate.
+    static let api = website.appendingPathComponent("api/license")
+    /// Shared key the website hands out when its licence server can't be reached (/purchased/demo).
     static let demoKey = "ISOLA-DEMO-7Q4K-2M9X"
     private static let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
 
     private(set) var key: String?
     private(set) var devices: [LicensedMac]
+    /// The server has this Mac on `key`: false after an offline activation, until it's registered.
+    private(set) var registered: Bool
+    /// What the licence server last said: "none" (not asked yet), "ok", "offline" or "refused-<status>".
+    private(set) var serverStatus = "none"
     private(set) var firstLaunch: Date
     /// Ticks once a minute so the trial countdown stays current.
     private(set) var now = Date()
@@ -47,12 +55,15 @@ final class License {
 
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var lastReminder = Date.distantPast
+    /// Gallery snapshots never talk to the server.
+    @ObservationIgnored private var previewing = false
     private let store: UserDefaults
 
     init(store: UserDefaults = .standard) {
         self.store = store
         key = store.string(forKey: "license.key")
         devices = (store.data(forKey: "license.devices")).flatMap { try? JSONDecoder().decode([LicensedMac].self, from: $0) } ?? []
+        registered = store.bool(forKey: "license.registered")
         firstLaunch = store.object(forKey: "license.firstLaunch") as? Date ?? Date()
         let id = store.string(forKey: "license.deviceID") ?? UUID().uuidString
         store.set(id, forKey: "license.deviceID")
@@ -65,6 +76,7 @@ final class License {
             MainActor.assumeIsolated { License.shared.tick() }
         }
         tick()
+        refresh()
     }
 
     private func tick() {
@@ -86,38 +98,103 @@ final class License {
 
     // MARK: - Activation
 
-    @discardableResult
-    func activate(_ raw: String) -> Bool {
+    /// Checks the key here, then registers this Mac with the licence server.
+    func activate(_ raw: String) {
         let candidate = Self.normalize(raw)
         guard Self.isValid(candidate) else {
             message = "That doesn’t look like an Isola license key."
-            return false
+            return
         }
+        message = nil
+        Task { await register(candidate) }
+    }
+
+    private func register(_ candidate: String) async {
+        let before = key
+        let device = ["id": thisMac.id, "name": thisMac.name, "model": thisMac.model]
+        let answer = await ask("activate", ["key": candidate, "device": device])
+        guard key == before else { return }  // deactivated meanwhile
+        guard let answer else { return activateLocally(candidate) }
+        guard answer.ok else { return refused(answer, key: candidate) }
+        key = candidate
+        devices = answer.devices ?? [thisMac]
+        registered = true
+        draft = ""
+        message = nil
+        save()
+    }
+
+    /// Offline: the checksum and a local list of up to three Macs, as before the server. The next
+    /// `refresh()` registers the Mac.
+    private func activateLocally(_ candidate: String) {
         if !devices.contains(where: { $0.id == thisMac.id }) {
             guard devices.count < Self.deviceLimit else {
                 message = "This license is already active on \(Self.deviceLimit) Macs. Deactivate one first."
-                return false
+                return
             }
             var mac = thisMac
             mac.activated = Date()
             devices.append(mac)
         }
         key = candidate
+        registered = false
         draft = ""
         message = nil
         save()
-        return true
     }
 
-    func deactivate(_ id: String) {
-        devices.removeAll { $0.id == id }
-        if id == thisMac.id { key = nil }
+    /// A definite no. For the key this Mac already uses (removed from another Mac, or an offline
+    /// activation that doesn't hold) the server wins, and this Mac goes back to the trial.
+    private func refused(_ answer: Answer, key candidate: String) {
+        message = answer.error ?? "The license server refused this key."
+        guard key == candidate else { return }
+        key = nil
+        devices = []
+        registered = false
         save()
+    }
+
+    /// Syncs with the server, at launch and when the License tab opens: an offline activation
+    /// registers, a registered Mac takes the server's list. Offline, the cached list stays.
+    func refresh() {
+        guard let key, !previewing else { return }
+        Task {
+            if !registered { return await register(key) }
+            // The shared demo key keeps no list on the server: it's just this Mac.
+            guard key != Self.demoKey, let answer = await ask("devices", ["key": key, "deviceId": thisMac.id]),
+                  self.key == key else { return }
+            guard answer.ok else { return refused(answer, key: key) }
+            devices = answer.devices ?? devices
+            save()
+        }
+    }
+
+    /// This Mac always goes, offline too, so nobody is stuck licensed; another Mac needs the server.
+    func deactivate(_ id: String) {
+        guard let key else { return }
+        Task {
+            var answer: Answer?
+            if key != Self.demoKey { answer = await ask("deactivate", ["key": key, "deviceId": thisMac.id, "target": id]) }
+            if id == thisMac.id {
+                self.key = nil
+                devices = []
+                registered = false
+                message = nil
+            } else if let answer, answer.ok {
+                devices = answer.devices ?? devices
+                message = nil
+            } else {
+                message = answer?.error ?? "Couldn’t reach the license server. Try again when you’re online."
+            }
+            save()
+        }
     }
 
     func reset() {
         key = nil
         devices = []
+        registered = false
+        serverStatus = "none"
         firstLaunch = Date()
         store.set(firstLaunch, forKey: "license.firstLaunch")
         message = nil
@@ -126,17 +203,60 @@ final class License {
     }
 
     /// For gallery snapshots only.
-    func preview(key: String?, devices: [LicensedMac], firstLaunch: Date, message: String? = nil) {
+    func preview(key: String?, devices: [LicensedMac], firstLaunch: Date, message: String? = nil, serverStatus: String = "ok") {
+        previewing = true
         self.key = key
         self.devices = devices
         self.firstLaunch = firstLaunch
         self.message = message
+        self.serverStatus = serverStatus
         now = Date()
     }
 
     private func save() {
         store.set(key, forKey: "license.key")
         store.set(try? JSONEncoder().encode(devices), forKey: "license.devices")
+        store.set(registered, forKey: "license.registered")
+    }
+
+    // MARK: - Licence server
+
+    /// An answer from the server: its status, and {devices} or {error}.
+    struct Answer: Decodable {
+        var status = 0
+        var devices: [LicensedMac]?
+        var error: String?
+        var ok: Bool { (200..<300).contains(status) }
+
+        private enum CodingKeys: CodingKey { case devices, error }
+
+        /// The server's dates are ISO 8601 without fractional seconds.
+        static func decode(_ data: Data) -> Answer? {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try? decoder.decode(Answer.self, from: data)
+        }
+    }
+
+    /// POST <api>/<action>, noting the outcome in `serverStatus`. nil when the server can't be
+    /// reached, fails (5xx) or answers with anything but its JSON (as before it's deployed).
+    private func ask(_ action: String, _ body: [String: Any]) async -> Answer? {
+        let url = Self.api.appendingPathComponent(action)
+        let answer = await Self.post(url, (try? JSONSerialization.data(withJSONObject: body)) ?? Data())
+        serverStatus = answer.map { $0.ok ? "ok" : "refused-\($0.status)" } ?? "offline"
+        return answer
+    }
+
+    private nonisolated static func post(_ url: URL, _ body: Data) async -> Answer? {
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let status = (response as? HTTPURLResponse)?.statusCode, status < 500,
+              var answer = Answer.decode(data) else { return nil }
+        answer.status = status
+        return answer
     }
 
     // MARK: - Key format: ISOLA-XXXX-XXXX-XXXX, last character is a weighted checksum.
@@ -182,6 +302,12 @@ final class License {
         assert(isValid(demoKey), "the website demo key is accepted")
         assert(!isValid("ISOLA-ABCD-EFGH"), "too short")
         assert(isValid(normalize(" isola" + key.dropFirst(5).lowercased() + " ")), "case and spaces are forgiven")
+        // What the licence server (api/license.ts) mints and answers.
+        assert(isValid("ISOLA-U9VJ-DMME-DWJU"), "a key minted by the licence server validates")
+        let list = #"{"devices":[{"id":"A","name":"Studio","model":"Mac14,13","activated":"2026-10-21T09:41:00Z"}]}"#
+        assert(Answer.decode(Data(list.utf8))?.devices?.first?.name == "Studio", "the server's Mac list decodes")
+        let refusal = #"{"error":"This license is already active on 3 Macs. Deactivate one first."}"#
+        assert(Answer.decode(Data(refusal.utf8))?.error?.hasPrefix("This license") == true, "a refusal decodes")
     }
 
     private static func modelIdentifier() -> String {
@@ -310,8 +436,14 @@ struct LicensePage: View {
                 } header: {
                     Text("Activated Macs (\(license.devices.count) of \(License.deviceLimit))")
                 } footer: {
-                    Text("Deactivate a Mac to free a slot for another one.")
-                        .multilineTextAlignment(.leading)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let message = license.message {
+                            Label(message, systemImage: "exclamationmark.circle.fill").foregroundStyle(.red)
+                        }
+                        Text("Deactivate a Mac to free a slot for another one."
+                            + (license.serverStatus == "offline" ? " The license server can’t be reached, so this list may be out of date." : ""))
+                    }
+                    .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             case .trial, .expired:
@@ -367,6 +499,7 @@ struct LicensePage: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { license.refresh() }
     }
 
     private var updateTitle: String {

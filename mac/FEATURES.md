@@ -9,7 +9,7 @@ Every line of the reference app's public changelog (165 items, versions 1.0–1.
 - **Missing**: not implemented. **Blocked**: needs something this project can't have (Apple entitlements or notarization, a third-party account, hardware).
 - **N/A**: a line about the reference product's own history rather than a capability.
 
-**165 items:** ✅ Done 133 · 🔶 Built, unverified 26 · 🟡 Partial 3 · 🧪 Simulated 1 · ⛔ Blocked 2
+**165 items:** ✅ Done 133 · 🔶 Built, unverified 28 · 🟡 Partial 2 · ⛔ Blocked 2
 
 **Seen live:** 56 of them were exercised on the test Mac (✓ column), with real system data or with simulated input through the same code path (`isolactl`). The rest were checked by reading the code and by the offscreen `--gallery` self-checks.
 
@@ -133,7 +133,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 92 | Added EarPods as supported output device | ✅ Done |  | `Sources/Isola/Modules/Media/MediaViews.swift:447` | EarPods, AirPods/Pro/Max, Beats, HomePod and HDMI glyph + name come from HUDOutput. Covered by the self-check. |
 | 93 | Added option to disable in fullscreen | 🔶 Built, unverified |  | `Sources/Isola/Support/Fullscreen.swift:59` | Accepts the full frame or the frame minus the notch inset (self-checked); no notched display on the test Mac. |
 | 94 | Added option to hide now playing widget instantly | ✅ Done |  | `lockscreen.hideInstantly; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:149-154` | Skips the 10 s grace period when hiding an inactive card. |
-| 95 | Added option to silence update prompt | ✅ Done | ✓ | `Sources/Isola/Modules/Settings/License.swift:199,257,266,360` | Daily check of releases.json, island notification, "Silence update prompt". Feed not published yet, so "Couldn't check" for now. |
+| 95 | Added option to silence update prompt | ✅ Done | ✓ | `Sources/Isola/Modules/Settings/License.swift:325,383,392,492` | Daily check of releases.json, island notification, "Silence update prompt". Feed not published yet, so "Couldn't check" for now. |
 | 96 | Added option to hide note symbol | ✅ Done |  | `media.hideNoteSymbol; Sources/Isola/Modules/Media/MediaViews.swift:134` | Hides the ♪/mic glyph in the quick-peek marquee. |
 | 97 | Added Apple displays as supported outputs | ✅ Done |  | `Sources/Isola/Modules/HUD/HUDModule.swift:74` | Outputs whose name contains "display" (Studio Display, UltraFine) get the display glyph, in the player and the HUD. |
 | 98 | Added weather widget | ✅ Done | ✓ | `lockscreen.showWeather, weather.city; Sources/Isola/Modules/Calendar/Weather.swift:25-33,56-70; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:398-408` | Open-Meteo current conditions; needs a city or location set in settings. |
@@ -150,7 +150,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 104 | Added artwork glare effect | ✅ Done |  | `Sources/Isola/Modules/Media/MediaViews.swift:29` | Glare on wing and player artwork, follows the pointer via a tracking area, on by default. Pointer-follow not run live. |
 | 105 | Added show in browser menu option | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:204` | Brings the playing tab to the front when Automation is granted; otherwise activates the app. |
 | 106 | Added copy link support for YouTube | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:536` | YouTube tab picked by host + title (self-checked); browser scripts not run without consent. |
-| 107 | Added ability to remove other devices | 🧪 Simulated |  | `Sources/Isola/Modules/Settings/License.swift:96` | Deactivate works; other Macs only via the gallery: licensing is a local mock (no payment or licence server). |
+| 107 | Added ability to remove other devices | 🔶 Built, unverified |  | `Sources/Isola/Modules/Settings/License.swift:173; ../api/license.ts:311` | Deactivate on another Mac goes through the licence server (POST /api/license/deactivate) and the list it returns; the removed Mac drops to the trial at its next sync. Server covered by `npm run test:api`; not deployed yet, so not exercised live. |
 | 108 | Improved device recognition support | ✅ Done |  | `Sources/Isola/Modules/System/Bluetooth.swift:137,265; Sources/Isola/Modules/HUD/HUDControls.swift:65` | 33-model table (AirPods + 17 Beats) from AppleDB, matched to system_profiler. The HUD uses it too. |
 | 109 | Restored system media support | ✅ Done | ✓ | `Sources/Isola/Modules/Media/MediaRemoteBridge.swift:22-56; Helpers/MediaRemoteHelper.m:78-101; Sources/Isola/Modules/Media/NowPlayingSources.swift:64-68` | Perl-hosted MediaRemote helper restores system-wide now playing on macOS 15.4+ (private API). |
 | 110 | Added copy link functionality | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:179` | Copy link for Apple Music (store id), Spotify and browsers; AppleScript paths compiled, not run without consent. |
@@ -173,7 +173,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 127 | Added low battery sound | ✅ Done |  | `Sources/Isola/Modules/System/Power.swift:76-81; system.lowBatterySound` | IOKit power-source events; Funk plays at the chosen threshold and again at 10%. |
 | 128 | Added low battery sound for connectivity | ✅ Done |  | `Sources/Isola/Modules/System/Bluetooth.swift:85; system.deviceLowBatterySound` | Funk on device low battery; only runs if BluetoothMonitor started (connect notifications on at launch). |
 | 129 | Added sound previews | ✅ Done |  | `Sources/Isola/Modules/System/SystemSettings.swift:28,46,58; Sources/Isola/Support/Preferences.swift:48-49` | Turning any of the five sound settings on plays its sound once, on both settings pages. |
-| 130 | Added device overview to license tab | 🟡 Partial |  | `Sources/Isola/Modules/Settings/License.swift:204` | Device overview lists this Mac only; a multi-Mac overview needs a real licence server. |
+| 130 | Added device overview to license tab | 🔶 Built, unverified |  | `Sources/Isola/Modules/Settings/License.swift:159,435; ../api/license.ts:301` | Lists every Mac the licence server has on the key, synced at launch and when the tab opens; offline it keeps the last list with a note (gallery: settings-license-offline). Not exercised live: the server isn't deployed yet. |
 | 131 | Added hide from screen capture option | ✅ Done |  | `Sources/Isola/Island/IslandWindows.swift:46-48; hideFromScreenCapture` | Island panels get sharingType = .none; newer ScreenCaptureKit captures may ignore it. |
 | 132 | Improved fullscreen logic (no longer beta) | 🔶 Built, unverified |  | `Sources/Isola/Support/Fullscreen.swift:44` | One hidden flag per display; Mission Control hiding was seen live, fullscreen apps were not tried. |
 | 133 | Added swipe to dismiss live activity gesture | ✅ Done | ✓ | `Sources/Isola/Island/Island.swift:112` | Hidden until a start/update with a new contentKey, or it ends. Timer and Focus have no key yet. |
