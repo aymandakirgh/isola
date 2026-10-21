@@ -65,16 +65,29 @@ final class MediaController {
     /// Re-apply the last snapshot (after a filter preference changes).
     func refresh() { apply(lastSnapshot) }
 
+    /// Shown title and artist: untitled media takes its app's name, and the app fills an empty artist line.
+    static func names(title: String, artist: String, app: String?) -> (title: String, artist: String) {
+        title.isEmpty ? (app ?? "Now Playing", artist) : (title, artist.isEmpty ? app ?? "" : artist)
+    }
+
+    private static func appName(_ bundleID: String?) -> String? {
+        guard let id = bundleID else { return nil }
+        return NSRunningApplication.runningApplications(withBundleIdentifier: id).first?.localizedName
+            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.deletingPathExtension().lastPathComponent
+    }
+
     func apply(_ snapshot: NowPlayingSnapshot?) {
         lastSnapshot = snapshot
-        guard let s = snapshot, !(s.title.isEmpty && s.artist.isEmpty), !excluded(s.bundleID) else { return clear() }
+        // Media without a title or artist (a bare stream, an untagged video) still counts while its app plays it.
+        let untitled = snapshot.map { $0.title.isEmpty && $0.artist.isEmpty } ?? true
+        guard let s = snapshot, !untitled || (s.bundleID != nil && (s.isPlaying || s.duration > 0)), !excluded(s.bundleID) else { return clear() }
         let key = "\(s.title)\u{1f}\(s.artist)\u{1f}\(s.album)"
         let trackChanged = !lastTrackKey.isEmpty && key != lastTrackKey
         let wasPlaying = state.isPlaying
         let resumed = !trackChanged && s.isPlaying && !wasPlaying && state.hasTrack
 
-        state.title = s.title
-        state.artist = s.artist
+        let app = s.title.isEmpty || s.artist.isEmpty ? Self.appName(s.bundleID) : nil
+        (state.title, state.artist) = Self.names(title: s.title, artist: s.artist, app: app)
         state.album = s.album
         if s.artworkID != artworkID || (state.artwork == nil && s.artwork != nil) {
             artworkID = s.artworkID
@@ -182,7 +195,9 @@ enum MediaModule {
     private static func registerDebug() {
         let sim = SimulatedPlayer.shared
         Debug.on("media.play") { args in
-            sim.start(title: args["title"], artist: args["artist"], album: args["album"])
+            // blank=1: no title or artist, so the player falls back to the app's name.
+            let blank = args["blank"] != nil
+            sim.start(title: blank ? "" : args["title"], artist: blank ? "" : args["artist"], album: args["album"])
         }
         Debug.on("media.pause") { _ in if NowPlayingState.shared.isPlaying { NowPlayingState.shared.commands.togglePlay() } }
         Debug.on("media.resume") { _ in if !NowPlayingState.shared.isPlaying { NowPlayingState.shared.commands.togglePlay() } }
@@ -208,6 +223,12 @@ enum MediaModule {
         precondition(s.elapsed == 0, "seek clamps at the start: \(s.elapsed)")
         s.seek(to: 500)
         precondition(s.elapsed == 200, "seek clamps at the end: \(s.elapsed)")
+
+        precondition(MediaController.names(title: "", artist: "", app: "Safari") == ("Safari", ""), "untitled → app name")
+        precondition(MediaController.names(title: "", artist: "Band", app: "Safari") == ("Safari", "Band"), "untitled keeps its artist")
+        precondition(MediaController.names(title: "Song", artist: "", app: "Safari") == ("Song", "Safari"), "app under an artist-less title")
+        precondition(MediaController.names(title: "", artist: "", app: nil) == ("Now Playing", ""), "no app either")
+        precondition(MediaController.names(title: "Song", artist: "Band", app: nil) == ("Song", "Band"), "tagged track untouched")
     }
 
     static func gallery() {
@@ -229,6 +250,9 @@ enum MediaModule {
         Gallery.island("media-compact-playing-notch", item: MediaActivity.item(state: playing, ui: ui), geometry: .notchPreview)
         Gallery.island("media-peek", item: MediaActivity.item(state: other, ui: ui), peeking: true)
         Gallery.island("media-peek-notch", item: MediaActivity.item(state: playing, ui: ui), peeking: true, geometry: .notchPreview)
+        let untitled = SimulatedPlayer.sampleState(index: 2, playing: true)
+        (untitled.title, untitled.artist) = MediaController.names(title: "", artist: "", app: "Safari")
+        Gallery.island("media-peek-untitled", item: MediaActivity.item(state: untitled, ui: ui), peeking: true)
         Gallery.island("media-expanded", item: MediaActivity.item(state: playing, ui: ui), expanded: true)
         Gallery.island("media-expanded-paused", item: MediaActivity.item(state: explicitPaused, ui: ui), expanded: true)
         // Entries named "*settings" are snapshotted through a hosting view by the core gallery.

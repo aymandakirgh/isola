@@ -137,11 +137,10 @@ struct MediaPeek: View {
                 if !prefs.hideNoteSymbol {
                     Image(systemName: live ? "mic.fill" : "music.note").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Color(white: 0.45))
                 }
-                Text(displayTitle(state))
-                if !state.artist.isEmpty {
-                    Text("∙").foregroundStyle(Color(white: 0.45))
-                    Text(state.artist)
-                }
+                let title = displayTitle(state)
+                if !title.isEmpty { Text(title) }
+                if !title.isEmpty, !state.artist.isEmpty { Text("∙").foregroundStyle(Color(white: 0.45)) }
+                if !state.artist.isEmpty { Text(state.artist) }
             }
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(Palette.muted)
@@ -353,7 +352,9 @@ struct ExpandedPlayer: View {
                         Text(displayTitle(state)).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
                         if state.isExplicit { ExplicitBadge() }
                     }
-                    Text(state.artist).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.muted).lineLimit(1)
+                    if !state.artist.isEmpty {
+                        Text(state.artist).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.muted).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 6)
                 HStack(spacing: 8) {
