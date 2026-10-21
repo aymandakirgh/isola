@@ -13,6 +13,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/Isola" "$APP/Contents/MacOS/Isola"
 cp "$BIN/isolactl" build/isolactl
 cp -R Resources/Sounds Resources/AppIcon.icns "$APP/Contents/Resources/"
+mkdir -p "$APP/Contents/Resources/Media"
+cp ../public/videos/earbuds.mp4 "$APP/Contents/Resources/Media/"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" Resources/Info.plist > "$APP/Contents/Info.plist"
 codesign --force --deep --sign - "$APP"
 if [[ "${DMG:-1}" == 1 ]]; then

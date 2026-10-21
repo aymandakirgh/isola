@@ -9,7 +9,7 @@ enum SystemModule {
     static func start() {
         registerSettings()
         PowerMonitor.shared.start()
-        BluetoothMonitor.shared.start()
+        startBluetoothWhenOnboarded()
         FocusMonitor.shared.start()
         LockMonitor.start()
         registerDebug()
@@ -17,6 +17,22 @@ enum SystemModule {
 
     static func registerSettings() {
         SettingsRegistry.add("live", title: "Live Activities", symbol: "bolt.badge.clock", order: 30) { SystemSettingsView() }
+    }
+
+    /// Touching IOBluetooth triggers the Bluetooth permission prompt, so wait until
+    /// onboarding has explained it (and the user hasn't turned the feature off).
+    private static func startBluetoothWhenOnboarded() {
+        var started = false
+        let tryStart = {
+            guard !started, UserDefaults.standard.bool(forKey: "onboarded"),
+                  UserDefaults.standard.object(forKey: "system.bluetoothNotification") as? Bool ?? true else { return }
+            started = true
+            BluetoothMonitor.shared.start()
+        }
+        tryStart()
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { tryStart() }
+        }
     }
 
     // MARK: - isolactl simulations (this machine can't plug chargers or pair AirPods on cue)
