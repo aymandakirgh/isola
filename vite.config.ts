@@ -24,7 +24,7 @@ const PAGES = [
   {
     file: "privacy",
     title: "Privacy policy",
-    description: "No data or personal information is collected",
+    description: `What ${BRAND} keeps for your license, and why`,
   },
   {
     file: "recover",

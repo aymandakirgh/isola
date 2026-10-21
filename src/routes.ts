@@ -16,7 +16,7 @@ export const routes: RouteDef[] = [
     path: "/privacy",
     load: () => import("./pages/Privacy"),
     title: `${BRAND} — Privacy policy`,
-    description: "No data or personal information is collected",
+    description: `What ${BRAND} keeps for your license, and why`,
     dark: true,
   },
   { path: "/recover", load: () => import("./pages/Recover"), title: `${BRAND} — Recover your license`, description: "Recover your license" },

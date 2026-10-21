@@ -88,8 +88,9 @@ export default function Faqs() {
               name="remove"
             >
               <p>
-                Open the License tab in Settings and remove any Mac you no
-                longer use.
+                Open the License tab in Settings and deactivate any Mac you no
+                longer use. A Mac can remove itself or any Mac activated after
+                it, so your first Mac can always tidy up the list.
               </p>
               <p className={DIM}>
                 Need a complete reset instead? Just reach out.
@@ -164,12 +165,19 @@ export default function Faqs() {
               name="privacy"
               symbol={symbol(SHIELD_LOCK_PATH)}
             >
-              No. {BRAND} doesn’t collect any data or personal information — see
-              the{" "}
-              <InlineLink href="/privacy" label="Privacy policy">
-                privacy policy
-              </InlineLink>
-              .
+              <p>
+                Only what your license needs: the key, the e-mail address you
+                give at checkout if you give one, and for each activated Mac a
+                hashed hardware ID, its name and its model. Nothing else is
+                kept.
+              </p>
+              <p className={DIM}>
+                The{" "}
+                <InlineLink href="/privacy" label="Privacy policy">
+                  privacy policy
+                </InlineLink>{" "}
+                has the details.
+              </p>
             </AccordionItem>
           </Accordion>
           <div className="mt-12 pt-6">
