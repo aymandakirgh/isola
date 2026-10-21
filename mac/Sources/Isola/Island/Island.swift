@@ -44,10 +44,19 @@ final class Island {
             activities[i] = updated
             return
         }
+        let shown = currentActivity
         withAnimation(Springs.expand) {
             activities.append(item)
-            if let i = sortedActivities.firstIndex(where: { $0.id == item.id }) { activityIndex = i }
+            // A new activity takes the island unless something more important is showing.
+            show(shown.map { $0.priority > item.priority } == true ? shown?.id : item.id)
         }
+    }
+
+    /// Point the island at an activity (nil: the most important one); an expanded island
+    /// collapses if the newly shown item has nothing to expand into.
+    private func show(_ id: String?) {
+        activityIndex = id.flatMap { id in sortedActivities.firstIndex { $0.id == id } } ?? 0
+        if expanded, current?.expanded == nil { expanded = false }
     }
 
     /// Replace an activity's content without re-announcing it.
@@ -60,9 +69,10 @@ final class Island {
 
     func end(_ id: String) {
         guard activities.contains(where: { $0.id == id }) else { return }
+        let shown = currentActivity?.id
         withAnimation(Springs.collapseActivity) {
             activities.removeAll { $0.id == id }
-            activityIndex = 0
+            show(shown == id ? nil : shown)
             if activities.isEmpty, transient == nil { expanded = false; peeking = false }
         }
     }
@@ -72,7 +82,8 @@ final class Island {
     /// Swipe down / middle click: show the next live activity.
     func cycle() {
         guard activities.count > 1 else { return }
-        withAnimation(Springs.expand) { activityIndex = (activityIndex + 1) % activities.count }
+        let next = sortedActivities[(activityIndex + 1) % activities.count].id
+        withAnimation(Springs.expand) { show(next) }
     }
 
     // MARK: - Transients (notifications and HUDs)
@@ -124,13 +135,6 @@ final class Island {
 
     func setHovering(_ on: Bool) {
         guard on != hovering else { return }
-        if let item = current, item.peekOnHover, item.peek != nil, !expanded {
-            hovering = on
-            quickPeek(on)
-            return
-        }
-        guard !peeking else { return }
-        withAnimation(on ? Springs.hoverIn : Springs.hoverOut) { hovering = on && !expanded }
         hoverExpandTimer?.invalidate()
         let delay = Preferences.shared.hoverExpandDelay
         if on, delay > 0, !expanded {
@@ -139,6 +143,13 @@ final class Island {
             }
         }
         if !on { setPressed(false) }
+        if let item = current, item.peekOnHover, item.peek != nil, !expanded {
+            hovering = on
+            quickPeek(on)
+            return
+        }
+        guard !peeking else { return }
+        withAnimation(on ? Springs.hoverIn : Springs.hoverOut) { hovering = on && !expanded }
     }
 
     func setPressed(_ on: Bool) {

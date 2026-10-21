@@ -7,8 +7,9 @@ VERSION=${ISOLA_VERSION:-1.4.7}
 BUILD=${ISOLA_BUILD:-151}
 # Release builds are universal (Apple silicon + Intel); debug builds stay native.
 ARCHS=(); [[ "$CONFIG" == release ]] && ARCHS=(--arch arm64 --arch x86_64)
-swift build -c "$CONFIG" "${ARCHS[@]}"
-BIN=$(swift build -c "$CONFIG" "${ARCHS[@]}" --show-bin-path)
+# ${ARCHS[@]+...}: bash 3.2 treats an empty array as unbound under set -u.
+swift build -c "$CONFIG" ${ARCHS[@]+"${ARCHS[@]}"}
+BIN=$(swift build -c "$CONFIG" ${ARCHS[@]+"${ARCHS[@]}"} --show-bin-path)
 APP=build/Isola.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
