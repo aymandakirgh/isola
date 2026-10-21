@@ -4,8 +4,11 @@ import AppKit
 @MainActor
 enum Sounds {
     private static var cache: [String: NSSound] = [:]
+    /// Set while another Mac's settings are applied: a sound turned on there doesn't preview here.
+    static var muted = false
 
     static func play(_ name: String, volume: Float = 1) {
+        guard !muted else { return }
         let sound = cache[name] ?? load(name)
         guard let sound else { return }
         cache[name] = sound

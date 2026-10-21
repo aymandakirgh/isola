@@ -20,10 +20,13 @@ enum SettingsModule {
             Island.shared.post(Updates.prompt(release), duration: 8)
         }
         if !UserDefaults.standard.bool(forKey: "onboarded") { OnboardingWindow.show() }
+        // Last, so every module's settings exist when another Mac's values are applied.
+        SettingsSync.shared.start()
     }
 
     static func gallery() {
         License.selfCheck()
+        SettingsSync.selfCheck()
         Updates.gallery()
         SettingsGallery.render()
     }
