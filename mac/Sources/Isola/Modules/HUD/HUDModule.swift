@@ -36,6 +36,8 @@ final class HUDPreferences {
     var showExternalChanges: Bool = load("hud.showExternalChanges", true) {
         didSet { store.set(showExternalChanges, forKey: "hud.showExternalChanges") }
     }
+    /// Brightness and volume of displays BetterDisplay drives, from its OSD notifications.
+    var betterDisplay: Bool = load("hud.betterDisplay", true) { didSet { store.set(betterDisplay, forKey: "hud.betterDisplay") } }
     /// Defaults to the system "Play feedback when volume is changed" setting.
     var feedbackSound: Bool = load("hud.feedbackSound", (store.object(forKey: "com.apple.sound.beep.feedback") as? Int ?? 0) == 1) {
         didSet { store.set(feedbackSound, forKey: "hud.feedbackSound") }
@@ -145,6 +147,12 @@ enum HUDModule {
         registerDebug()
         if let v = SystemAudio.volume() { lastVolume = (v, SystemAudio.isMuted()) }
         SystemAudio.observe { volumeChanged() }
+        DistributedNotificationCenter.default().addObserver(forName: BetterDisplayOSD.notification, object: nil, queue: .main) { note in
+            guard let json = note.object as? String, let osd = try? JSONDecoder().decode(BetterDisplayOSD.self, from: Data(json.utf8)) else { return }
+            MainActor.assumeIsolated {
+                if HUDPreferences.shared.betterDisplay, let snapshot = osd.snapshot() { show(snapshot) }
+            }
+        }
         updateTap()
         // Accessibility can be granted at any time in System Settings.
         Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in MainActor.assumeIsolated { updateTap() } }
@@ -278,6 +286,17 @@ enum HUDModule {
             show(HUDSnapshot(kind: .brightness, level: args["level"].flatMap(Double.init) ?? 0.6))
             if args["push"] == "1" { rubberBand() }
         }
+        // Posts what BetterDisplay posts (other apps listening for it see it too), so the
+        // observer and decoding run: `target=hardwareBrightness|volume|mute value=40 max=100`.
+        Debug.on("hud.betterdisplay") { args in
+            let osd: [String: Any] = [
+                "controlTarget": args["target"] ?? "hardwareBrightness",
+                "value": args["value"].flatMap(Double.init) ?? 60, "maxValue": args["max"].flatMap(Double.init) ?? 100,
+                "displayID": args["display"].flatMap(Int.init) ?? Int(NSScreen.main?.displayID ?? 0),
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: osd), let json = String(data: data, encoding: .utf8) else { return }
+            DistributedNotificationCenter.default().postNotificationName(BetterDisplayOSD.notification, object: json, userInfo: nil, deliverImmediately: true)
+        }
     }
 
     /// Pure-logic checks; run with every gallery render (debug build asserts).
@@ -294,6 +313,14 @@ enum HUDModule {
         precondition(HUDOutput(name: "Kitchen", transport: kAudioDeviceTransportTypeBluetooth, deviceSymbol: "airpods.max").label == "Kitchen", "renamed device keeps its name")
         assert(HUDOutput(name: "MacBook Pro Speakers", transport: kAudioDeviceTransportTypeBuiltIn, dataSource: 0x6864_706E).label == "Speakers")
         assert(abs(HUDOutput.approximateDecibels(0.5) + 12.04) < 0.01 && HUDOutput.approximateDecibels(0) == -63.5)
+        func osd(_ json: String) -> HUDSnapshot? { (try? JSONDecoder().decode(BetterDisplayOSD.self, from: Data(json.utf8)))?.snapshot() }
+        let brightness = osd(#"{"displayID":1,"systemIconID":1,"controlTarget":"hardwareBrightness","value":40,"maxValue":100}"#)
+        precondition(brightness?.kind == .brightness && brightness?.level == 0.4, "BetterDisplay brightness")
+        let volume = osd(#"{"systemIconID":3,"controlTarget":"volume","value":0.25,"maxValue":1}"#)
+        precondition(volume?.kind == .volume && volume?.level == 0.25 && volume?.muted == false && volume?.output.symbol == "tv", "BetterDisplay volume")
+        precondition(osd(#"{"systemIconID":4,"controlTarget":"mute"}"#)?.muted == true, "BetterDisplay mute, no level")
+        precondition(osd(#"{"controlTarget":"contrast","value":50,"maxValue":100}"#) == nil && osd(#"{"controlTarget":"softwareBrightness","value":0.5}"#) == nil,
+            "BetterDisplay: no HUD for other controls or a level without maximum")
     }
 
     static func gallery() {
@@ -341,7 +368,7 @@ enum HUDModule {
     private static func snapshotSettings() {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--gallery"), i + 1 < args.count else { return }
-        let size = NSRect(x: 0, y: 0, width: 520, height: 880)
+        let size = NSRect(x: 0, y: 0, width: 520, height: 1040)
         let host = NSHostingView(rootView: HUDSettingsView().frame(width: size.width, height: size.height))
         host.frame = size
         let window = NSWindow(contentRect: size, styleMask: [.titled], backing: .buffered, defer: false)

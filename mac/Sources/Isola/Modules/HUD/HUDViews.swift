@@ -128,6 +128,13 @@ struct HUDSettingsView: View {
             } footer: {
                 Text("Volume changed by other apps, Control Center or your AirPods. Turning this off needs the option above, so Isola can tell those changes from your key presses.")
             }
+            Section {
+                Toggle("Brightness and volume from BetterDisplay", isOn: $hud.betterDisplay)
+            } header: {
+                Text("Other displays")
+            } footer: {
+                Text("For monitors BetterDisplay controls. In BetterDisplay, turn on Settings › Application › Integration › Dispatch OSD notifications, and hide its own OSD in its Keyboard settings.")
+            }
             Section("Appearance") {
                 Picker("Style", selection: $hud.style) {
                     ForEach(HUDStyle.allCases) { Text($0.title).tag($0) }

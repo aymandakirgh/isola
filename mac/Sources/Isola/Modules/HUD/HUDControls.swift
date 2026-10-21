@@ -160,6 +160,40 @@ enum DisplayBrightness {
     }
 }
 
+/// BetterDisplay's documented feed for third-party HUDs: with its Settings › Application ›
+/// Integration › "Dispatch OSD notifications" on, each brightness or volume change on a
+/// display it drives (DDC monitors included) is posted as a distributed notification whose
+/// object is this JSON. https://betterdisplay.pro/guide/integration/third-party-apps/
+struct BetterDisplayOSD: Decodable {
+    /// The current name; the legacy com.betterdisplay one repeats every event.
+    static let notification = Notification.Name("pro.betterdisplay.BetterDisplay.osd")
+
+    var displayID: Int?
+    var systemIconID: Int?  // 1 brightness, 3 volume, 4 mute
+    var controlTarget: String?  // combinedBrightness, hardwareBrightness, softwareBrightness, volume, mute, …
+    var value: Double?
+    var maxValue: Double?
+
+    /// The HUD it maps to; nil for what Isola has no HUD for (contrast, gamma, …) or a
+    /// level it can't place (no maximum).
+    @MainActor func snapshot() -> HUDSnapshot? {
+        let target = controlTarget ?? ""
+        let fraction = value.flatMap { v in maxValue.flatMap { $0 > 0 ? min(1, max(0, v / $0)) : nil } }
+        let screen = NSScreen.screens.first { Int($0.displayID) == displayID }
+        let name = screen.map { $0.isBuiltIn ? "Built-in Display" : $0.localizedName } ?? "Display"
+        if target.hasSuffix("Brightness") || (target.isEmpty && systemIconID == 1) {
+            return fraction.map { HUDSnapshot(kind: .brightness, level: $0, displayName: name) }
+        }
+        let muted = target == "mute" || (target.isEmpty && systemIconID == 4)
+        guard muted || target == "volume" || (target.isEmpty && systemIconID == 3), muted || fraction != nil else { return nil }
+        let level = fraction ?? 0
+        return HUDSnapshot(
+            kind: .volume, level: level, muted: muted, decibels: HUDOutput.approximateDecibels(level),
+            output: HUDOutput(name: name, transport: kAudioDeviceTransportTypeDisplayPort)
+        )
+    }
+}
+
 enum MediaKey: Int {
     case volumeUp = 0, volumeDown = 1, brightnessUp = 2, brightnessDown = 3, mute = 7
 }
