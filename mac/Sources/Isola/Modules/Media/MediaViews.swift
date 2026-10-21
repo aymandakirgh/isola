@@ -137,6 +137,7 @@ struct MediaPeek: View {
                 if !prefs.hideNoteSymbol {
                     Image(systemName: live ? "mic.fill" : "music.note").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Color(white: 0.45))
                 }
+                if state.inTransition { SourceTag(text: "AutoMix") }
                 Text(displayTitle(state))
                 if !state.artist.isEmpty {
                     Text("∙").foregroundStyle(Color(white: 0.45))
@@ -329,6 +330,30 @@ private struct CopyLinkButton: View {
     }
 }
 
+private struct LikeButton: View {
+    let state: NowPlayingState
+
+    var body: some View {
+        ControlIcon(symbol: state.liked ? "heart.fill" : "heart", size: 12, width: 24) { state.commands.toggleLike() }
+            .contentTransition(.symbolEffect(.replace))
+    }
+}
+
+/// "Lossless", "Dolby Atmos" or "AutoMix", in small outlined capitals.
+private struct SourceTag: View {
+    let text: String
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(.system(size: 7.5, weight: .bold))
+            .foregroundStyle(Palette.muted)
+            .padding(.horizontal, 4)
+            .frame(height: 12)
+            .overlay(Capsule().strokeBorder(Palette.muted.opacity(0.55), lineWidth: 0.75))
+            .fixedSize()
+    }
+}
+
 struct ExpandedPlayer: View {
     let state: NowPlayingState
     let ui: MediaUI
@@ -347,10 +372,14 @@ struct ExpandedPlayer: View {
                         Text(displayTitle(state)).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
                         if state.isExplicit { ExplicitBadge() }
                     }
-                    Text(state.artist).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.muted).lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(state.artist).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.muted).lineLimit(1)
+                        if let tag = state.inTransition ? "AutoMix" : state.audioFormat { SourceTag(text: tag) }
+                    }
                 }
                 Spacer(minLength: 6)
                 HStack(spacing: 8) {
+                    if state.canLike { LikeButton(state: state) }
                     if let link = ui.link { CopyLinkButton(link: link) }
                     SpeedMenu(state: state, ui: ui)
                     if ui.offscreen {
@@ -428,7 +457,7 @@ struct MediaSettingsView: View {
             }
             Section("Source") {
                 LabeledContent("Now playing", value: sourceDescription)
-                Text("Music and Spotify are read with AppleScript only when macOS withholds system now-playing info and Automation access is already granted.")
+                Text("Music and Spotify are read with AppleScript only when macOS withholds system now-playing info and Automation access is already granted. Liking in Music asks for it the first time.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

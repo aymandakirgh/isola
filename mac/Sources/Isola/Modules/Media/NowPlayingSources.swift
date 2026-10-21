@@ -18,6 +18,13 @@ struct NowPlayingSnapshot {
     var bundleID: String?
     var explicit = false
     var link: URL?
+    /// The source takes a like; `liked` is nil when it does not say whether the track is liked.
+    var canLike = false
+    var liked: Bool?
+    /// Apple Music AutoMix is crossfading into the next track.
+    var inTransition = false
+    /// "Lossless", "Hi-Res Lossless" or "Dolby Atmos".
+    var audioFormat: String?
 }
 
 /// Polls/receives now-playing info and routes media commands to whichever source is live:
@@ -32,6 +39,12 @@ final class NowPlayingSources {
     private let remote = MediaRemote()
     private var lastScriptPoll = Date.distantPast
     private var scriptPolling = false
+    /// What the snapshots do not carry: Automation consent per app (only ever checked, never asked
+    /// for here) and a like known better than the source says (Music's AppleScript, a fresh click).
+    private var last: NowPlayingSnapshot?
+    private var trackKey = ""
+    private var automation: [String: OSStatus] = [:]
+    private var liked: (value: Bool, until: Date)?
 
     func start() {
         remote.register()
@@ -60,12 +73,12 @@ final class NowPlayingSources {
         guard !SimulatedPlayer.shared.active else { return }
         if let snapshot {
             source = .mediaRemote
-            return MediaController.shared.apply(snapshot)
+            return deliver(snapshot)
         }
         // Direct MediaRemote is silent (blocked on macOS 15.4+): use the perl-hosted helper.
         if let bridged = MediaRemoteBridge.shared.latest {
             source = .bridge
-            return MediaController.shared.apply(bridged)
+            return deliver(bridged)
         }
         // Nothing playing, or no helper. Ask the scriptable players, off the main thread and only
         // those Automation already allows: an idle Music or Spotify must not stall the UI or prompt.
@@ -87,7 +100,74 @@ final class NowPlayingSources {
         // The helper may have spoken while the script ran; it wins.
         guard !SimulatedPlayer.shared.active, MediaRemoteBridge.shared.latest == nil else { return }
         source = found.map { .script($0.0) } ?? .none
-        MediaController.shared.apply(found?.1)
+        deliver(found?.1)
+    }
+
+    /// Adds the consent-gated extras, then hands the snapshot to the Media module.
+    private func deliver(_ snapshot: NowPlayingSnapshot?) {
+        last = snapshot
+        guard var s = snapshot else { return MediaController.shared.apply(nil) }
+        let key = "\(s.bundleID ?? "")\u{1f}\(s.title)\u{1f}\(s.artist)"
+        if key != trackKey {
+            trackKey = key
+            liked = nil
+            checkConsent(s.bundleID)
+        }
+        if let id = s.bundleID, id == ScriptPlayer.music.bundleID {
+            // Music favourites go through AppleScript, whatever MediaRemote offers; liking may ask
+            // for Automation once, so only a denied Music gets no heart.
+            let consent = automation[id]
+            s.canLike = consent == noErr || consent == OSStatus(errAEEventWouldRequireUserConsent)
+        }
+        if let liked, s.liked == nil || Date() < liked.until { s.liked = liked.value }
+        MediaController.shared.apply(s)
+    }
+
+    /// Off the main thread: what Automation already allows for the source app (never prompts),
+    /// and Music's favourite flag when it may be read.
+    private func checkConsent(_ bundleID: String?) {
+        guard let id = bundleID, ScriptPlayer.allCases.contains(where: { $0.bundleID == id }) else { return }
+        let key = trackKey
+        Scripting.queue.async {
+            let consent = Scripting.consent(id)
+            let favourite = consent == noErr && id == ScriptPlayer.music.bundleID ? ScriptPlayer.music.favourite() : nil
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let sources = NowPlayingSources.shared
+                    sources.automation[id] = consent
+                    if let favourite, key == sources.trackKey { sources.liked = (favourite, .distantFuture) }
+                    if key == sources.trackKey { sources.deliver(sources.last) }
+                }
+            }
+        }
+    }
+
+    /// Music: AppleScript favourite (the click may ask for Automation once). Others: MediaRemote's
+    /// LikeTrack, shown at once and corrected by the source within two seconds if it disagrees.
+    private func toggleLike() {
+        let state = NowPlayingState.shared
+        let want = !state.liked
+        liked = (want, Date().addingTimeInterval(2))
+        state.liked = want
+        if case .simulated = source { return SimulatedPlayer.shared.setLiked(want) }
+        guard state.sourceBundleID == ScriptPlayer.music.bundleID else {
+            if case .bridge = source { MediaRemoteBridge.shared.send("like \(want ? 1 : 0)") }
+            return
+        }
+        let key = trackKey
+        Scripting.queue.async {
+            let result = ScriptPlayer.music.setFavourite(want)
+            let consent = Scripting.consent(ScriptPlayer.music.bundleID)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let sources = NowPlayingSources.shared
+                    sources.automation[ScriptPlayer.music.bundleID] = consent
+                    guard key == sources.trackKey else { return }
+                    sources.liked = result.map { ($0, .distantFuture) }
+                    sources.deliver(sources.last)
+                }
+            }
+        }
     }
 
     private func installCommands() {
@@ -142,6 +222,7 @@ final class NowPlayingSources {
                 NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
             }
         }
+        commands.toggleLike = { MainActor.assumeIsolated { NowPlayingSources.shared.toggleLike() } }
         NowPlayingState.shared.commands = commands
     }
 
@@ -161,6 +242,7 @@ final class MediaRemote {
         "kMRMediaRemoteNowPlayingApplicationDidChangeNotification",
     ]
 
+    /// Values as MRMediaRemoteCopyCommandDescription names them.
     enum Command: UInt32 {
         case play = 0, pause = 1, togglePlayPause = 2, stop = 3, nextTrack = 4, previousTrack = 5
         case advanceShuffleMode = 6, advanceRepeatMode = 7, changePlaybackRate = 19
@@ -224,6 +306,7 @@ final class MediaRemote {
         s.shuffle = (num("ShuffleMode") ?? 1) >= 2
         s.repeatMode = switch Int(num("RepeatMode") ?? 1) { case 2: 1; case 3: 2; default: 0 }
         s.explicit = (num("IsExplicitTrack") ?? 0) > 0
+        s.inTransition = (num("IsInTransition") ?? 0) > 0
         if pid > 0 { s.bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier }
         if let data = d["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data {
             let key = (d["kMRMediaRemoteNowPlayingInfoArtworkIdentifier"] as? String) ?? "\(s.title)|\(s.album)|\(data.count)"
@@ -354,6 +437,21 @@ enum ScriptPlayer: CaseIterable {
         }
     }
 
+    /// Music's favourite flag: `favorited`, formerly `loved`; both are the pLov property.
+    func favourite() -> Bool? {
+        Scripting.run("tell application id \"com.apple.Music\" to return («class pLov» of current track) as string")?.stringValue.map { $0 == "true" }
+    }
+
+    /// Sets the favourite flag and reads it back (nil when Music refused, e.g. a radio stream).
+    func setFavourite(_ on: Bool) -> Bool? {
+        Scripting.run("""
+        tell application id "com.apple.Music"
+          set «class pLov» of current track to \(on)
+          return («class pLov» of current track) as string
+        end tell
+        """)?.stringValue.map { $0 == "true" }
+    }
+
     func toggleShuffle() {
         perform(self == .music ? "set shuffle enabled to not shuffle enabled" : "set shuffling to not shuffling")
     }
@@ -373,6 +471,21 @@ enum ScriptPlayer: CaseIterable {
         case .spotify:
             perform("set repeating to not repeating")
         }
+    }
+}
+
+/// Labels derived from what the sources report.
+enum NowPlayingExtras {
+    /// MediaRemote audio tiers: 2 Lossless, 3 HighResolutionLossless, 4 Spatial; rendering mode 5 DolbyAtmos.
+    static func audioFormat(tier: Int?, rendering: Int?) -> String? {
+        if rendering == 5 || tier == 4 { return "Dolby Atmos" }
+        return tier == 3 ? "Hi-Res Lossless" : tier == 2 ? "Lossless" : nil
+    }
+
+    static func selfCheck() {
+        precondition(audioFormat(tier: 2, rendering: 1) == "Lossless" && audioFormat(tier: 3, rendering: nil) == "Hi-Res Lossless")
+        precondition(audioFormat(tier: 4, rendering: nil) == "Dolby Atmos" && audioFormat(tier: 1, rendering: 5) == "Dolby Atmos")
+        precondition(audioFormat(tier: 1, rendering: 1) == nil && audioFormat(tier: nil, rendering: nil) == nil)
     }
 }
 
@@ -409,6 +522,7 @@ final class SimulatedPlayer {
     private var rate = 1.0
     private var shuffle = false
     private var repeatMode = 0
+    private var liked = false
 
     private var track: Track { custom ?? Self.tracks[index] }
 
@@ -437,11 +551,12 @@ final class SimulatedPlayer {
     }
 
     func togglePlay() { freeze(); playing.toggle(); push() }
-    func skip(_ step: Int) { custom = nil; index = (index + step + Self.tracks.count) % Self.tracks.count; elapsed = 0; elapsedAt = Date(); playing = true; push() }
+    func skip(_ step: Int) { custom = nil; index = (index + step + Self.tracks.count) % Self.tracks.count; elapsed = 0; elapsedAt = Date(); playing = true; liked = false; push() }
     func seek(_ time: TimeInterval) { elapsed = max(0, min(track.duration, time)); elapsedAt = Date(); push() }
     func setRate(_ value: Double) { freeze(); rate = value; push() }
     func toggleShuffle() { shuffle.toggle(); push() }
     func cycleRepeat() { repeatMode = (repeatMode + 1) % 3; push() }
+    func setLiked(_ on: Bool) { liked = on; push() }
 
     private func push() {
         guard active else { return }
@@ -462,6 +577,9 @@ final class SimulatedPlayer {
         s.bundleID = "com.apple.Music"
         s.explicit = index == 1
         s.link = URL(string: "https://open.spotify.com/track/simulated\(index)")
+        s.canLike = true
+        s.liked = liked
+        s.audioFormat = ["Lossless", nil, "Dolby Atmos"][index]
         MediaController.shared.apply(s)
     }
 

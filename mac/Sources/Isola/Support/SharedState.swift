@@ -23,6 +23,13 @@ final class NowPlayingState {
     var repeatMode = 0  // 0 off, 1 one, 2 all
     var sourceBundleID: String?
     var isExplicit = false
+    /// The source takes a like (Music favourite, MediaRemote LikeTrack).
+    var canLike = false
+    var liked = false
+    /// Apple Music AutoMix is crossfading into the next track.
+    var inTransition = false
+    /// "Lossless", "Hi-Res Lossless" or "Dolby Atmos" when the player reports its stream format.
+    var audioFormat: String?
     var hasTrack: Bool { !title.isEmpty || !artist.isEmpty }
 
     /// Commands are wired by the Media module.
@@ -43,6 +50,7 @@ struct MediaCommands {
     var cycleRepeat: () -> Void = {}
     var setRate: (Double) -> Void = { _ in }
     var openSource: () -> Void = {}
+    var toggleLike: () -> Void = {}
 }
 
 @MainActor @Observable
