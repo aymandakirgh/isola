@@ -24,14 +24,14 @@ enum LockMonitor {
     }
 
     static func locked() {
-        if Preferences.shared.lockSound { Sounds.play("unlock", volume: 0.6) }
+        if Preferences.shared.lockSound { Sounds.lock() }
         guard SystemPreferences.shared.lockActivity else { return }
         LockModel.shared.unlocked = false
         Island.shared.start(item())
     }
 
     static func unlocked() {
-        if Preferences.shared.unlockSound { Sounds.play("unlock") }
+        if Preferences.shared.unlockSound { Sounds.unlock() }
         guard Island.shared.isRunning(activityID) else { return }
         withAnimation(.easeInOut(duration: 0.3)) { LockModel.shared.unlocked = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.475) { Island.shared.end(activityID) }

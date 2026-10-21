@@ -4,7 +4,8 @@ import SwiftUI
 private let store = UserDefaults.standard
 private func flag(_ key: String, _ fallback: Bool) -> Bool { store.object(forKey: key) as? Bool ?? fallback }
 
-/// Settings for system-driven notifications and live activities.
+/// Settings for system-driven notifications and live activities. Turning a sound on
+/// plays it once as a preview.
 @MainActor @Observable
 final class SystemPreferences {
     static let shared = SystemPreferences()
@@ -24,7 +25,7 @@ final class SystemPreferences {
         didSet { store.set(lowBatteryThreshold, forKey: "system.lowBatteryThreshold") }
     }
     var lowBatterySound = flag("system.lowBatterySound", true) {
-        didSet { store.set(lowBatterySound, forKey: "system.lowBatterySound") }
+        didSet { store.set(lowBatterySound, forKey: "system.lowBatterySound"); if lowBatterySound { Sounds.lowBattery() } }
     }
     var lowPowerNotification = flag("system.lowPowerNotification", true) {
         didSet { store.set(lowPowerNotification, forKey: "system.lowPowerNotification") }
@@ -42,7 +43,7 @@ final class SystemPreferences {
         didSet { store.set(deviceLowBattery, forKey: "system.deviceLowBattery") }
     }
     var deviceLowBatterySound = flag("system.deviceLowBatterySound", true) {
-        didSet { store.set(deviceLowBatterySound, forKey: "system.deviceLowBatterySound") }
+        didSet { store.set(deviceLowBatterySound, forKey: "system.deviceLowBatterySound"); if deviceLowBatterySound { Sounds.lowBattery() } }
     }
 
     // Focus
@@ -51,6 +52,10 @@ final class SystemPreferences {
     }
     var focusActivity = flag("system.focusActivity", false) {
         didSet { store.set(focusActivity, forKey: "system.focusActivity"); FocusMonitor.shared.syncActivity() }
+    }
+    /// A soft sound when the Sleep Focus turns on (telling Sleep apart needs Full Disk Access).
+    var sleepFocusSound = flag("system.sleepFocusSound", false) {
+        didSet { store.set(sleepFocusSound, forKey: "system.sleepFocusSound"); if sleepFocusSound { Sounds.sleepFocus() } }
     }
 
     // Lock
@@ -87,6 +92,7 @@ struct SystemSettingsView: View {
             Section {
                 Toggle("Focus changes", isOn: $prefs.focusNotification)
                 Toggle("Focus live activity", isOn: $prefs.focusActivity)
+                Toggle("Sound when Sleep turns on", isOn: $prefs.sleepFocusSound)
                 PermissionRow(permission: .focus)
                 PermissionRow(permission: .fullDiskAccess)
             } header: {

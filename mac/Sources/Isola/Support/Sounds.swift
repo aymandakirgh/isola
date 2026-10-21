@@ -14,6 +14,12 @@ enum Sounds {
         sound.play()
     }
 
+    // Each sound setting's sound, played by the event and as its preview in Settings.
+    static func unlock() { play("unlock") }
+    static func lock() { play("unlock", volume: 0.6) }
+    static func lowBattery() { play("Funk") }
+    static func sleepFocus() { play("Purr", volume: 0.5) }
+
     private static func load(_ name: String) -> NSSound? {
         if let url = Bundle.main.url(forResource: name, withExtension: "wav", subdirectory: "Sounds") {
             return NSSound(contentsOf: url, byReference: true)

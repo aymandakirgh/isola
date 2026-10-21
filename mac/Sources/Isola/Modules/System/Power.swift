@@ -77,7 +77,7 @@ final class PowerMonitor {
         for t in [prefs.lowBatteryThreshold, 0.1] where r.level <= t && t < warned {
             warned = t
             Island.shared.post(PowerItems.lowBattery(level: r.level), duration: 5)
-            if prefs.lowBatterySound { Sounds.play("Funk") }
+            if prefs.lowBatterySound { Sounds.lowBattery() }
             break
         }
     }

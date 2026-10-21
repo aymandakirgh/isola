@@ -81,10 +81,11 @@ enum SystemModule {
         }
         Debug.on("system.focus") { a in
             let name = a["name"] ?? "Work"
-            let known = FocusMonitor.known.values.first { $0.name == name }
+            // A known name keeps its mode id, so `name=Sleep` also plays the Sleep sound.
+            let known = FocusMonitor.known.first { $0.value.name == name }
             let mode = FocusMonitor.Mode(
-                id: "debug", name: name, symbol: a["symbol"] ?? known?.symbol ?? "moon.fill",
-                tint: known?.tint ?? .systemIndigo
+                id: known?.key ?? "debug", name: name, symbol: a["symbol"] ?? known?.value.symbol ?? "moon.fill",
+                tint: known?.value.tint ?? .systemIndigo
             )
             let monitor = FocusMonitor.shared
             monitor.pause(for: 30)
@@ -137,8 +138,8 @@ enum SystemModule {
             .background(Color.black)
         }
         // Forms are AppKit-backed, which ImageRenderer can't draw: snapshot a real hosting view.
-        let settings = snapshot(SystemSettingsView(), size: CGSize(width: 520, height: 860))
-        Gallery.add("system-settings", size: CGSize(width: 520, height: 860)) { Image(nsImage: settings) }
+        let settings = snapshot(SystemSettingsView(), size: CGSize(width: 520, height: 1000))
+        Gallery.add("system-settings", size: CGSize(width: 520, height: 1000)) { Image(nsImage: settings) }
     }
 
     /// Parser/classifier checks; runs with `Isola --gallery` (asserts trip in debug builds).

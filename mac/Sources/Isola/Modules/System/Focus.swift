@@ -46,6 +46,9 @@ final class FocusMonitor {
         if announce, SystemPreferences.shared.focusNotification, let shown = mode ?? previous {
             Island.shared.post(FocusItems.changed(shown, on: mode != nil))
         }
+        if announce, mode?.id == Self.sleepID, previous?.id != Self.sleepID, SystemPreferences.shared.sleepFocusSound {
+            Sounds.sleepFocus()
+        }
         syncActivity()
     }
 
@@ -78,6 +81,7 @@ final class FocusMonitor {
               let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
         guard let id = firstValue("assertionDetailsModeIdentifier", in: json) as? String else { return .some(nil) }
         var mode = known[id] ?? Mode(id: id, name: "Focus", symbol: "moon.fill", tint: .systemIndigo)
+        mode.id = id
         if let config = try? Data(contentsOf: dir.appendingPathComponent("ModeConfigurations.json")),
            let configJSON = try? JSONSerialization.jsonObject(with: config),
            let m = modeDictionary(id, in: configJSON) {
@@ -88,10 +92,12 @@ final class FocusMonitor {
         return .some(mode)
     }
 
+    nonisolated static let sleepID = "com.apple.sleep.sleep-mode"
+
     nonisolated static let known: [String: Mode] = [
         "com.apple.donotdisturb.mode.default": Mode(id: "", name: "Do Not Disturb", symbol: "moon.fill", tint: .systemIndigo),
         "com.apple.focus.work": Mode(id: "", name: "Work", symbol: "briefcase.fill", tint: .systemTeal),
-        "com.apple.sleep.sleep-mode": Mode(id: "", name: "Sleep", symbol: "bed.double.fill", tint: .systemMint),
+        sleepID: Mode(id: "", name: "Sleep", symbol: "bed.double.fill", tint: .systemMint),
         "com.apple.focus.personal-time": Mode(id: "", name: "Personal", symbol: "person.fill", tint: .systemPurple),
         "com.apple.donotdisturb.mode.driving": Mode(id: "", name: "Driving", symbol: "car.fill", tint: .systemOrange),
         "com.apple.focus.fitness": Mode(id: "", name: "Fitness", symbol: "figure.run", tint: .systemGreen),

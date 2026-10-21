@@ -82,7 +82,7 @@ final class BluetoothMonitor: NSObject {
             let delay = Island.shared.transient?.id == "system.bluetooth" ? Preferences.shared.notificationDuration : 0
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 Island.shared.post(BluetoothItems.lowBattery(device), duration: 5)
-                if prefs.deviceLowBatterySound { Sounds.play("Funk") }
+                if prefs.deviceLowBatterySound { Sounds.lowBattery() }
             }
             break
         }
