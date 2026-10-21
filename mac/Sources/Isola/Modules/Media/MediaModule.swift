@@ -152,6 +152,7 @@ enum MediaActivity {
         .peek(onHover: true) { MediaPeek(state: state) }
         .expanded(size: CGSize(width: 420, height: 162)) { ExpandedPlayer(state: state, ui: ui) }
         .onOptionTap { state.commands.togglePlay() }
+        .inactive { !state.isPlaying }
         .contentKey("\(state.title)\u{1f}\(state.artist)")
         .onSwipe { direction in
             switch direction {

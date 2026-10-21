@@ -25,6 +25,8 @@ struct IslandItem: Identifiable {
     var onTap: (() -> Void)?
     var onOptionTap: (() -> Void)?
     var onSwipe: ((SwipeDirection) -> Bool)?
+    /// Live check that the activity is idle (paused media); "Expand while inactive" off keeps it compact.
+    var inactive: (() -> Bool)?
     /// What the activity shows (e.g. the track). Swiped away, it stays hidden until it
     /// starts or updates with a different key, or ends.
     var contentKey: String?
@@ -75,6 +77,12 @@ struct IslandItem: Identifiable {
     func onSwipe(_ action: @escaping (SwipeDirection) -> Bool) -> IslandItem {
         var copy = self
         copy.onSwipe = action
+        return copy
+    }
+
+    func inactive(_ when: @escaping () -> Bool) -> IslandItem {
+        var copy = self
+        copy.inactive = when
         return copy
     }
 

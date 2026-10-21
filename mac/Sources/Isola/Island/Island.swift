@@ -157,11 +157,17 @@ final class Island {
 
     func setExpanded(_ on: Bool) {
         hoverExpandTimer?.invalidate()
-        guard on != expanded, !(on && current?.expanded == nil) else { return }
+        guard on != expanded, !(on && !canExpand) else { return }
         withAnimation(on ? Springs.openPanel : Springs.collapseActivity) {
             expanded = on
             if on { peeking = false; hovering = false }
         }
+    }
+
+    /// Only items with a panel expand; with "Expand while inactive" off, idle ones (paused media) stay compact.
+    private var canExpand: Bool {
+        guard let item = current, item.expanded != nil else { return false }
+        return Preferences.shared.expandWhileInactive || item.inactive?() != true
     }
 
     func setHovering(_ on: Bool) {

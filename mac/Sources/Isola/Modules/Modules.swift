@@ -38,11 +38,13 @@ enum CoreDemo {
     }
 
     static func start() {
-        // `demo id=other` adds a second activity; `key` is the content key a swipe-up dismissal waits on.
+        // `demo id=other` adds a second activity (duo mode); `key` is the content key a swipe-up
+        // dismissal waits on; `inactive=1` marks it idle like paused media.
         Debug.on("demo") { args in
             let id = args["id"] ?? "demo"
             if args["off"] != nil { return Island.shared.end(id) }
-            Island.shared.start(item(id: id).contentKey(args["key"]))
+            let inactive = args["inactive"] == "1"
+            Island.shared.start(item(id: id).contentKey(args["key"]).inactive { inactive })
         }
         Debug.on("activity.dismiss") { args in
             if let id = args["id"] ?? Island.shared.currentActivity?.id { Island.shared.dismiss(id) }
@@ -66,5 +68,13 @@ enum CoreDemo {
         Gallery.island("core-hover", item: item(), hovering: true)
         Gallery.island("core-peek", item: item(), peeking: true)
         Gallery.island("core-expanded", item: item(), expanded: true)
+
+        // Whole General and Island pages (the settings window crops them).
+        Gallery.add("core-general-settings", size: CGSize(width: 520, height: 1010)) {
+            GeneralPage(nav: SettingsNav()).background(Color(nsColor: .windowBackgroundColor))
+        }
+        Gallery.add("core-island-settings", size: CGSize(width: 520, height: 640)) {
+            IslandPage().background(Color(nsColor: .windowBackgroundColor))
+        }
     }
 }

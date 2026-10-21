@@ -227,6 +227,10 @@ struct IslandPage: View {
                         Text(delay == 0 ? "Off" : "After \(delay.formatted()) s").tag(delay)
                     }
                 }
+                Toggle(isOn: $prefs.expandWhileInactive) {
+                    Text("Expand while inactive")
+                    Text("Clicking or hovering paused media opens its player.")
+                }
                 LabeledContent("Show notifications for") {
                     HStack {
                         Slider(value: Binding(get: { prefs.notificationDuration }, set: { prefs.notificationDuration = ($0 * 2).rounded() / 2 }), in: 1.5...8)
