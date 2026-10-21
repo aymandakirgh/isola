@@ -573,6 +573,9 @@ enum CalendarText {
 
     static func time(_ date: Date) -> String { date.formatted(date: .omitted, time: .shortened) }
     static func range(_ start: Date, _ end: Date) -> String { "\(time(start)) – \(time(end))" }
+    static func month(_ date: Date) -> String { date.formatted(.dateTime.month(.wide)) }
+    static func dayNumber(_ date: Date) -> String { String(Calendar.current.component(.day, from: date)) }
+    static func weekdayInitial(_ date: Date) -> String { date.formatted(.dateTime.weekday(.narrow)) }
 
     /// Multi-day events: "Day 1 of 3 · from 22:00", "Day 2 of 3", "Day 3 of 3 · until 07:10".
     /// nil for an event that starts and ends on the same day.
@@ -583,9 +586,6 @@ enum CalendarText {
         if e.isAllDay { return label }
         return i == 0 ? "\(label) · from \(time(e.start))" : i == days.count - 1 ? "\(label) · until \(time(e.end))" : label
     }
-    static func month(_ date: Date) -> String { date.formatted(.dateTime.month(.wide)) }
-    static func dayNumber(_ date: Date) -> String { String(Calendar.current.component(.day, from: date)) }
-    static func weekdayInitial(_ date: Date) -> String { date.formatted(.dateTime.weekday(.narrow)) }
 
     // Chinese lunisolar calendar ("lunar year support").
     private static let chinese = Calendar(identifier: .chinese)

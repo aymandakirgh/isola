@@ -1,4 +1,3 @@
-import AudioToolbox
 import CoreAudio
 import Observation
 import SwiftUI
@@ -62,7 +61,7 @@ struct LockScreenData {
     var devices: [ConnectedDevice] = []
     var event: CalendarEvent?
     /// The default output device (the card's output glyph).
-    var output = HUDOutput(name: "MacBook Pro Speakers", transport: kAudioDeviceTransportTypeBuiltIn)
+    var output = HUDOutput.preset("speakers")
 
     /// Call inside `body`: reading the @Observable stores makes SwiftUI track them.
     @MainActor static func live(at date: Date = Date()) -> LockScreenData {
@@ -213,7 +212,7 @@ struct NowPlayingWidget: View {
     var style: NowPlayingWidgetStyle = .glass
     var grayscale = false
     /// The default output device, drawn at the end of the controls.
-    var output = HUDOutput(name: "MacBook Pro Speakers", transport: kAudioDeviceTransportTypeBuiltIn)
+    var output = HUDOutput.preset("speakers")
     /// Shows the output volume row when set.
     var volume: LockVolume? = nil
     var commands: MediaCommands = MediaCommands()
