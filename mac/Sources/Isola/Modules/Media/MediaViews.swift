@@ -144,6 +144,8 @@ struct SpectrogramShape: Shape {
 
     func path(in r: CGRect) -> Path {
         var p = Path()
+        // Island springs can overshoot an interpolated level past 0...1.
+        let levels = levels.map { min(1, max(0, $0)) }
         switch style {
         case .bars, .mirrored:
             // Mirrored: seven thinner bars, bass in the middle.

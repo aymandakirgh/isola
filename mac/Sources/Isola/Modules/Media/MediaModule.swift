@@ -320,7 +320,7 @@ enum MediaModule {
         let wing = CGRect(x: 0, y: 0, width: 20, height: 20)
         for style in SpectrogramStyle.allCases {
             func box(_ levels: [Double]) -> CGRect { SpectrogramShape(style: style, levels: levels).path(in: wing).cgPath.boundingBoxOfPath }
-            for levels in [[0.0, 0, 0, 0], [1, 1, 1, 1], [1, 0, 1, 0], [0, 1, 0, 1]] {
+            for levels in [[0.0, 0, 0, 0], [1, 1, 1, 1], [1, 0, 1, 0], [0, 1, 0, 1], [-0.2, 1.2, -0.2, 1.2]] {
                 precondition(wing.contains(box(levels)), "\(style) \(levels) leaves the wing: \(box(levels))")
             }
             precondition(box([1, 1, 1, 1]).height > box([0, 0, 0, 0]).height + 6, "\(style) barely moves")
