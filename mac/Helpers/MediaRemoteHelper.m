@@ -6,6 +6,7 @@
 // ("cmd <MRCommand>", "seek <seconds>", "rate <x>"). EOF on stdin ends the helper.
 #import <Foundation/Foundation.h>
 #include <dlfcn.h>
+#include <math.h>
 
 typedef void (*RegisterFn)(dispatch_queue_t);
 typedef void (*InfoFn)(dispatch_queue_t, void (^)(CFDictionaryRef));
@@ -15,7 +16,24 @@ typedef Boolean (*SendFn)(unsigned int, CFDictionaryRef);
 typedef void (*ElapsedFn)(double);
 
 static void *mr;
-static NSString *lastArtworkID = @"";
+static NSString *lastArtworkID = @"", *lastTrack = @"";
+static NSData *lastLine;
+
+// Strings and finite numbers only: NSJSONSerialization throws on NaN/Inf, which would kill the helper.
+static BOOL usable(id v) {
+    return [v isKindOfClass:NSString.class] || ([v isKindOfClass:NSNumber.class] && isfinite([v doubleValue]));
+}
+
+static void output(NSDictionary *o) {
+    if (![NSJSONSerialization isValidJSONObject:o]) return;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:o options:NSJSONWritingSortedKeys error:nil];
+    // Each change arrives as a burst of notifications: only the first identical line goes out.
+    if (!json || [json isEqualToData:lastLine]) return;
+    lastLine = json;
+    fwrite(json.bytes, 1, json.length, stdout);
+    fputc('\n', stdout);
+    fflush(stdout);
+}
 
 static void emit(void) {
     InfoFn info = (InfoFn)dlsym(mr, "MRMediaRemoteGetNowPlayingInfo");
@@ -33,26 +51,29 @@ static void emit(void) {
                                        @"RepeatMode": @"repeat", @"IsExplicitTrack": @"explicit"};
                 for (NSString *k in keys) {
                     id v = d[[p stringByAppendingString:k]];
-                    if ([v isKindOfClass:NSString.class] || [v isKindOfClass:NSNumber.class]) o[keys[k]] = v;
+                    if (usable(v)) o[keys[k]] = v;
                 }
+                // No timestamp means "now" on Isola's side; sending the clock here would defeat deduplication.
                 NSDate *ts = d[@"kMRMediaRemoteNowPlayingInfoTimestamp"];
-                o[@"timestamp"] = @([ts isKindOfClass:NSDate.class] ? ts.timeIntervalSince1970 : NSDate.date.timeIntervalSince1970);
+                if ([ts isKindOfClass:NSDate.class] && isfinite(ts.timeIntervalSince1970)) o[@"timestamp"] = @(ts.timeIntervalSince1970);
                 o[@"playing"] = @(isPlaying);
                 o[@"pid"] = @(processID);
+                NSString *track = [NSString stringWithFormat:@"%@|%@|%@", o[@"title"], o[@"artist"], o[@"album"]];
+                BOOL sameTrack = [track isEqualToString:lastTrack];
+                lastTrack = track;
                 NSData *art = d[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
                 if ([art isKindOfClass:NSData.class]) {
                     NSString *aid = d[@"kMRMediaRemoteNowPlayingInfoArtworkIdentifier"];
                     if (![aid isKindOfClass:NSString.class]) aid = [NSString stringWithFormat:@"%@|%@|%lu", o[@"title"], o[@"album"], (unsigned long)art.length];
                     o[@"artworkID"] = aid;
                     if (![aid isEqualToString:lastArtworkID]) { o[@"artwork"] = [art base64EncodedStringWithOptions:0]; lastArtworkID = aid; }
+                } else if (sameTrack && lastArtworkID.length) {
+                    // Players republish the metadata on pause/play and add the art a moment later: keep the one Isola has.
+                    o[@"artworkID"] = lastArtworkID;
                 } else {
                     lastArtworkID = @"";
                 }
-                NSData *json = [NSJSONSerialization dataWithJSONObject:o options:0 error:nil];
-                if (!json) return;
-                fwrite(json.bytes, 1, json.length, stdout);
-                fputc('\n', stdout);
-                fflush(stdout);
+                output(o);
             });
         });
     });
@@ -63,6 +84,7 @@ static void handle(NSString *line) {
     if (parts.count < 2) return;
     NSString *verb = parts[0];
     double value = [parts[1] doubleValue];
+    if (!isfinite(value)) return;
     SendFn send = (SendFn)dlsym(mr, "MRMediaRemoteSendCommand");
     if ([verb isEqualToString:@"cmd"] && send) {
         send((unsigned int)value, NULL);
