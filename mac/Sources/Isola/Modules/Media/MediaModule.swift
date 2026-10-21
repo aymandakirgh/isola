@@ -10,7 +10,9 @@ private func load<T>(_ key: String, _ fallback: T) -> T { store.object(forKey: k
 final class MediaPreferences {
     static let shared = MediaPreferences()
 
-    var spectrogram: Bool = load("media.spectrogram", true) { didSet { store.set(spectrogram, forKey: "media.spectrogram") } }
+    var spectrogram: Bool = load("media.spectrogram", true) { didSet { store.set(spectrogram, forKey: "media.spectrogram"); MediaController.shared.syncLevels() } }
+    /// Bars follow the real audio (system audio tap) instead of a canned animation.
+    var liveWaveform: Bool = load("media.liveWaveform", false) { didSet { store.set(liveWaveform, forKey: "media.liveWaveform"); MediaController.shared.syncLevels() } }
     var grayscaleArtwork: Bool = load("media.grayscaleArtwork", false) { didSet { store.set(grayscaleArtwork, forKey: "media.grayscaleArtwork") } }
     var dimOnPause: Bool = load("media.dimOnPause", true) { didSet { store.set(dimOnPause, forKey: "media.dimOnPause") } }
     var hideNoteSymbol: Bool = load("media.hideNoteSymbol", false) { didSet { store.set(hideNoteSymbol, forKey: "media.hideNoteSymbol") } }
@@ -93,6 +95,13 @@ final class MediaController {
         if trackChanged { withAnimation(.easeInOut(duration: 0.5)) { MediaUI.shared.flipped.toggle() } }
         lastTrackKey = key
         updateActivity(peek: trackChanged || resumed, wasPlaying: wasPlaying)
+        syncLevels()
+    }
+
+    /// The audio tap only runs while it has something to draw.
+    func syncLevels() {
+        let p = MediaPreferences.shared
+        AudioLevels.shared.setActive(p.liveWaveform && p.spectrogram && state.isPlaying && !MediaUI.shared.offscreen)
     }
 
     private func clear() {
@@ -107,6 +116,7 @@ final class MediaController {
         artworkID = ""
         MediaUI.shared.link = nil
         Island.shared.end("media")
+        syncLevels()
     }
 
     private func updateActivity(peek: Bool, wasPlaying: Bool) {
@@ -184,6 +194,7 @@ enum MediaModule {
     static func gallery() {
         registerSettings()
         TitleCleaner.selfCheck()
+        BandAnalyzer.selfCheck()
         MediaUI.shared.offscreen = true
 
         let playing = SimulatedPlayer.sampleState(index: 0, playing: true)
