@@ -11,6 +11,7 @@ final class Island {
     private(set) var transient: IslandItem?
     private(set) var expanded = false
     private(set) var peeking = false
+    private(set) var peekCount = 0
     private(set) var hovering = false
     private(set) var pressed = false
     private(set) var activityIndex = 0
@@ -166,7 +167,10 @@ final class Island {
     func quickPeek(_ on: Bool, for duration: TimeInterval? = nil) {
         peekTimer?.invalidate()
         guard on != peeking, !(on && current?.peek == nil) else { return }
-        withAnimation(on ? Springs.peekIn : Springs.peekOut) { peeking = on }
+        withAnimation(on ? Springs.peekIn : Springs.peekOut) {
+            peeking = on
+            if on { peekCount &+= 1 }
+        }
         if on, let duration {
             peekTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { _ in
                 MainActor.assumeIsolated { Island.shared.quickPeek(false) }
@@ -253,7 +257,7 @@ final class Island {
     // MARK: - Geometry
 
     var state: IslandState {
-        IslandState(item: current, secondary: secondary, expanded: expanded, peeking: peeking, hovering: hovering, pressed: pressed)
+        IslandState(item: current, secondary: secondary, expanded: expanded, peeking: peeking, hovering: hovering, pressed: pressed, peekCount: peekCount)
     }
 
     /// Island size on a given screen for the current state.

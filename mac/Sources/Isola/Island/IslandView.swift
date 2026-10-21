@@ -93,6 +93,8 @@ struct IslandState {
     var peeking = false
     var hovering = false
     var pressed = false
+    /// Bumped by every quick peek, so a peek that reopens mid-exit starts fresh (marquee at rest).
+    var peekCount = 0
 }
 
 /// The island's black body and its content for one state.
@@ -156,7 +158,7 @@ struct IslandBody: View {
                 .frame(height: g.height)
                 if let item = state.item, let peek = item.peek, state.peeking || item.alwaysPeek {
                     peek
-                        .id("peek-\(item.id)")
+                        .id("peek-\(item.id)-\(state.peekCount)")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .transition(.islandPeek)
                 }
