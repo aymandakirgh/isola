@@ -16,8 +16,8 @@ final class MediaPreferences {
         didSet { store.set(spectrogramStyle.rawValue, forKey: "media.spectrogramStyle") }
     }
     /// While this Focus is on (`focusMode`, "" for any), the wing shows its symbol instead of the spectrogram.
-    var focusReplace: Bool = load("media.focusReplace", false) { didSet { store.set(focusReplace, forKey: "media.focusReplace") } }
-    var focusMode: String = load("media.focusMode", "") { didSet { store.set(focusMode, forKey: "media.focusMode") } }
+    var focusReplace: Bool = load("media.focusReplace", false) { didSet { store.set(focusReplace, forKey: "media.focusReplace"); MediaController.shared.syncLevels() } }
+    var focusMode: String = load("media.focusMode", "") { didSet { store.set(focusMode, forKey: "media.focusMode"); MediaController.shared.syncLevels() } }
     /// Bars follow the real audio (system audio tap) instead of a canned animation.
     var liveWaveform: Bool = load("media.liveWaveform", false) { didSet { store.set(liveWaveform, forKey: "media.liveWaveform"); MediaController.shared.syncLevels() } }
     var grayscaleArtwork: Bool = load("media.grayscaleArtwork", false) { didSet { store.set(grayscaleArtwork, forKey: "media.grayscaleArtwork") } }
@@ -36,6 +36,10 @@ final class MediaPreferences {
     var showTotalTime: Bool = load("media.showTotalTime", false) { didSet { store.set(showTotalTime, forKey: "media.showTotalTime") } }
     /// The volume row stays open when the player collapses and reopens.
     var keepVolumeOpen: Bool = load("media.keepVolumeOpen", false) { didSet { store.set(keepVolumeOpen, forKey: "media.keepVolumeOpen") } }
+
+    func showsFocus(_ focus: FocusState) -> Bool {
+        focusReplace && focus.active && (focusMode.isEmpty || focusMode == focus.name)
+    }
 
     /// `isolactl media.pref key=value`.
     func set(_ key: String, _ value: String) {
@@ -186,10 +190,10 @@ final class MediaController {
         syncLevels()
     }
 
-    /// The audio tap only runs while it has something to draw.
+    /// The audio tap only runs while it has something to draw (polls re-check a Focus that took the wing).
     func syncLevels() {
         let p = MediaPreferences.shared
-        AudioLevels.shared.setActive(p.liveWaveform && p.spectrogram && state.isPlaying && !MediaUI.shared.offscreen)
+        AudioLevels.shared.setActive(p.liveWaveform && p.spectrogram && !p.showsFocus(.shared) && state.isPlaying && !MediaUI.shared.offscreen)
     }
 
     private func clear() {

@@ -218,7 +218,7 @@ struct MediaTrailing: View {
 
     var body: some View {
         let prefs = MediaPreferences.shared
-        let showsFocus = prefs.focusReplace && focus.active && (prefs.focusMode.isEmpty || prefs.focusMode == focus.name)
+        let showsFocus = prefs.showsFocus(focus)
         ZStack {
             if showsFocus {
                 FocusWingSymbol(focus: focus).transition(.blurReplace)
