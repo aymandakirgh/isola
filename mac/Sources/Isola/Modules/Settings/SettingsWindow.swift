@@ -140,13 +140,34 @@ struct TweakSlider: View {
     var body: some View {
         LabeledContent(title) {
             HStack {
-                Slider(value: Binding(get: { value }, set: { value = $0.rounded() }), in: range)
+                Slider(value: Binding(get: { value }, set: { step(to: $0.rounded()) }), in: range)
                 Text("\(value > 0 ? "+" : "")\(Int(value)) pt")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .frame(width: 48, alignment: .trailing)
             }
         }
+    }
+
+    /// Each whole-point step gets a haptic bump and a very quiet tick.
+    private func step(to new: Double) {
+        guard new != value else { return }
+        value = new
+        FineTuneFeedback.tick()
+    }
+}
+
+/// Fine-tuner feedback, debounced so a fast drag doesn't rattle.
+@MainActor
+enum FineTuneFeedback {
+    private static var last = Date.distantPast
+
+    static func tick() {
+        let now = Date()
+        guard now.timeIntervalSince(last) > 0.05 else { return }
+        last = now
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        Sounds.play("Tink", volume: 0.08)
     }
 }
 
