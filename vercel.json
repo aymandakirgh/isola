@@ -2,7 +2,11 @@
   "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/((?!assets/|images/|sounds/|videos/|downloads/|favicon).*)",
+      "source": "/api/license/:action",
+      "destination": "/api/license?action=:action"
+    },
+    {
+      "source": "/((?!api/|assets/|images/|sounds/|videos/|downloads/|favicon).*)",
       "destination": "/"
     }
   ],
