@@ -92,6 +92,9 @@ enum SettingsWindow {
         window = w
         NSApp.activate()
         w.makeKeyAndOrderFront(nil)
+        // The page may already be on screen (no onAppear), and the window doesn't become key when
+        // another app keeps the focus: sync here too, so showing the License page always does.
+        if nav.selection == "license" { License.shared.refresh() }
     }
 
     static func close() {
