@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant flourishing (&:is(.group:hover *, .group.flourish *));
+
+@theme {
+  --font-sans: system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, monospace;
+  --font-numeric: ui-rounded, "Nunito", sans-serif;
+  --color-orange-25: #fffaf4;
+  --color-orange-75: #fff0df;
+  --container-screen-3xl: 108rem;
+  --radius-5xl: 2.5rem;
+  --animate-draw: draw 0.8s ease-in forwards;
+  --animate-rotate: rotate 3.5s linear infinite;
+  --animate-rotate-slow: rotate 10s linear infinite;
+  --animate-shine: shine 2s linear infinite;
+  --animate-spinner: spinner 1.5s ease-in-out infinite;
+  --animate-shake: shake 0.25s ease-out both;
+  --animate-header-rise: header-rise 0.5s ease 75ms both;
+  --animate-nav-fade: nav-fade 0.7s ease-in 75ms both;
+  --ease-spring: cubic-bezier(0.34, 1.2, 0.64, 1);
+}
+
+@keyframes playing {
+  0%,
+  to {
+    height: 3px;
+  }
+  50% {
+    height: 12px;
+  }
+}
+@keyframes marquee-first {
+  0% {
+    transform: translate(0%);
+  }
+  to {
+    transform: translate(-100%);
+  }
+}
+@keyframes marquee-second {
+  0% {
+    transform: translate(100%);
+  }
+  to {
+    transform: translate(0%);
+  }
+}
+@keyframes header-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(16px) scale(0.75) rotate(6deg);
+  }
+}
+@keyframes nav-fade {
+  0% {
+    opacity: 0;
+  }
+}
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes rotate {
+  0% {
+    transform: rotate(0);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes shine {
+  0% {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes spinner {
+  0% {
+    stroke-dasharray: 0 150;
+    stroke-dashoffset: 0;
+  }
+  47.5% {
+    stroke-dasharray: 42 150;
+    stroke-dashoffset: -16px;
+  }
+  95%,
+  to {
+    stroke-dasharray: 42 150;
+    stroke-dashoffset: -59px;
+  }
+}
+@keyframes shake {
+  25%,
+  75% {
+    transform: translate(4px);
+  }
+  50% {
+    transform: translate(-4px);
+  }
+}
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: --alpha(var(--color-orange-950) / 10%) transparent;
+  }
+  body {
+    @apply bg-orange-75 text-stone-800 antialiased transition-colors duration-300 ease-in-out dark:bg-stone-900 dark:text-orange-75;
+  }
+  body ::selection,
+  body::selection {
+    @apply bg-orange-950/10 dark:bg-orange-75/10;
+  }
+  mark {
+    @apply relative inline-block bg-transparent pr-2 font-extrabold text-stone-800 [box-decoration-break:clone];
+    &::after {
+      @apply absolute right-0 -bottom-1 left-0 -z-10 h-[0.5em] rounded-xs bg-rose-300/90 align-middle content-[''] md:-bottom-2;
+    }
+  }
+}
+
+@utility pause {
+  animation-play-state: paused;
+}
+@utility running {
+  animation-play-state: running;
+}
+@utility shimmer {
+  background:
+    radial-gradient(circle, #f5d0fe, #0000) -200% 100% / 200% 100% no-repeat,
+    #f0abfc80;
+}
+
+/* Page/nav choreography helpers (toggled from JS). */
+.suppress-hover .header-nav > :not(.nav-btn-leave) {
+  pointer-events: none;
+}
+.snap-back :not([data-squircle]) {
+  transition-duration: 0s !important;
+}
+.nav-btn-leave {
+  transition:
+    scale 0.3s var(--ease-spring),
+    opacity 0.3s var(--ease-spring);
+  position: fixed;
+}
+.theme-swap .nav-btn-enter {
+  transition:
+    opacity 0.5s var(--ease-spring) 0.6s,
+    scale 0.5s var(--ease-spring) 0.6s;
+}
+.theme-swap .nav-btn-enter:not(:hover) * {
+  transition-duration: 0s !important;
+}
