@@ -120,6 +120,14 @@ struct HUDSettingsView: View {
             } footer: {
                 Text("When off, Isola still shows its HUD whenever the volume changes, next to the macOS one. Brightness needs the keys, so it only appears when this is on.")
             }
+            Section {
+                Toggle("Show the HUD for changes made elsewhere", isOn: $hud.showExternalChanges)
+                    .disabled(!hud.replaceSystemHUD)
+            } header: {
+                Text("Sync")
+            } footer: {
+                Text("Volume changed by other apps, Control Center or your AirPods. Turning this off needs the option above, so Isola can tell those changes from your key presses.")
+            }
             Section("Appearance") {
                 Picker("Style", selection: $hud.style) {
                     ForEach(HUDStyle.allCases) { Text($0.title).tag($0) }
@@ -142,7 +150,7 @@ struct HUDSettingsView: View {
             } header: {
                 Text("Motion")
             } footer: {
-                Text("Speed and overshoot apply to the whole island.")
+                Text("Speed and overshoot apply to the whole island. With overshoot, the bar also stretches when you press past 0% or 100%.")
             }
             Section("Sound") {
                 Toggle("Play feedback when the volume is changed", isOn: $hud.feedbackSound)

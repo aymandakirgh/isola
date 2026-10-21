@@ -31,6 +31,11 @@ final class HUDPreferences {
     var glow: Bool = load("hud.glow", true) { didSet { store.set(glow, forKey: "hud.glow") } }
     var displaySymbol: Bool = load("hud.displaySymbol", false) { didSet { store.set(displaySymbol, forKey: "hud.displaySymbol") } }
     var duration: Double = load("hud.duration", 1.5) { didSet { store.set(duration, forKey: "hud.duration") } }
+    /// Sync: also show the HUD for volume changed elsewhere (other apps, Control Center,
+    /// AirPods), not only for key presses. Telling them apart needs the key tap.
+    var showExternalChanges: Bool = load("hud.showExternalChanges", true) {
+        didSet { store.set(showExternalChanges, forKey: "hud.showExternalChanges") }
+    }
     /// Defaults to the system "Play feedback when volume is changed" setting.
     var feedbackSound: Bool = load("hud.feedbackSound", (store.object(forKey: "com.apple.sound.beep.feedback") as? Int ?? 0) == 1) {
         didSet { store.set(feedbackSound, forKey: "hud.feedbackSound") }
@@ -184,8 +189,14 @@ enum HUDModule {
         guard let level = SystemAudio.volume() else { return }
         let muted = SystemAudio.isMuted()
         defer { lastVolume = (level, muted) }
-        guard ready, let last = lastVolume, abs(last.level - level) > 0.001 || last.muted != muted else { return }
+        guard ready, let last = lastVolume, abs(last.level - level) > 0.001 || last.muted != muted, syncsExternalChanges else { return }
         showVolume(level: level, muted: muted)
+    }
+
+    /// Key presses show the HUD themselves (MediaKeyTap); everything else reaching the
+    /// passive path was changed elsewhere. Without the tap, key presses arrive here too.
+    private static var syncsExternalChanges: Bool {
+        !MediaKeyTap.shared.isInstalled || HUDPreferences.shared.showExternalChanges
     }
 
     private static func showVolume(level: Double, muted: Bool) {
@@ -254,8 +265,10 @@ enum HUDModule {
 
     private static func registerDebug() {
         // Simulated: shows the HUD without touching the real volume or brightness.
-        // `push=1` also plays the rubber band, as a key press at 0% or 100% does.
+        // `push=1` also plays the rubber band, as a key press at 0% or 100% does;
+        // `elsewhere=1` goes through the sync setting like a change from another app.
         Debug.on("hud.volume") { args in
+            if args["elsewhere"] == "1", !syncsExternalChanges { return }
             let level = args["level"].flatMap(Double.init) ?? 0.5
             let output = args["device"].map(HUDOutput.preset) ?? HUDOutput.preset("speakers")
             show(HUDSnapshot(kind: .volume, level: level, muted: args["muted"] == "1", decibels: HUDOutput.approximateDecibels(level), output: output))
@@ -328,7 +341,7 @@ enum HUDModule {
     private static func snapshotSettings() {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--gallery"), i + 1 < args.count else { return }
-        let size = NSRect(x: 0, y: 0, width: 520, height: 700)
+        let size = NSRect(x: 0, y: 0, width: 520, height: 880)
         let host = NSHostingView(rootView: HUDSettingsView().frame(width: size.width, height: size.height))
         host.frame = size
         let window = NSWindow(contentRect: size, styleMask: [.titled], backing: .buffered, defer: false)
