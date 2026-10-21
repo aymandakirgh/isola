@@ -1,4 +1,5 @@
 import AppKit
+import CoreAudio
 import Observation
 import SwiftUI
 
@@ -31,6 +32,8 @@ final class MediaPreferences {
     var gradientProgress: Bool = load("media.gradientProgress", false) { didSet { store.set(gradientProgress, forKey: "media.gradientProgress") } }
     /// The label after the progress bar shows the total duration instead of the time left (tap it to switch).
     var showTotalTime: Bool = load("media.showTotalTime", false) { didSet { store.set(showTotalTime, forKey: "media.showTotalTime") } }
+    /// The volume row stays open when the player collapses and reopens.
+    var keepVolumeOpen: Bool = load("media.keepVolumeOpen", false) { didSet { store.set(keepVolumeOpen, forKey: "media.keepVolumeOpen") } }
 
     /// `isolactl media.pref key=value`.
     func set(_ key: String, _ value: String) {
@@ -50,6 +53,7 @@ final class MediaPreferences {
         case "excludeInapt": excludeInapt = on
         case "gradientProgress": gradientProgress = on
         case "showTotalTime": showTotalTime = on
+        case "keepVolumeOpen": keepVolumeOpen = on
         default: NSLog("isola: unknown media pref %@", key)
         }
     }
@@ -65,6 +69,32 @@ final class MediaUI {
     var link: URL?
     /// Offscreen gallery: NSView-backed controls are drawn as plain symbols.
     var offscreen = false
+    /// The expanded player shows the volume row in place of the progress bar.
+    var volumeOpen = false
+    /// Default output device and its volume (nil: no software volume), polled while the player is open.
+    var output = HUDOutput.preset("speakers")
+    var volume: Double?
+    var muted = false
+
+    func refreshOutput() {
+        output = SystemAudio.output()
+        volume = SystemAudio.canSetVolume() ? SystemAudio.volume() : nil
+        muted = SystemAudio.isMuted()
+    }
+
+    /// Changes made here keep the volume HUD from popping up over the player.
+    func setVolume(_ level: Double) {
+        HUDModule.quietUntil = Date().addingTimeInterval(0.5)
+        if muted { muted = false; SystemAudio.setMuted(false) }
+        volume = min(1, max(0, level))
+        SystemAudio.setVolume(volume ?? 0)
+    }
+
+    func toggleMute() {
+        HUDModule.quietUntil = Date().addingTimeInterval(0.5)
+        muted.toggle()
+        SystemAudio.setMuted(muted)
+    }
 }
 
 /// Turns source snapshots into `NowPlayingState` and runs the "media" live activity.
@@ -247,6 +277,7 @@ enum MediaModule {
         }
         Debug.on("media.end") { _ in sim.stop() }
         Debug.on("media.pref") { args in for (k, v) in args { MediaPreferences.shared.set(k, v) } }
+        Debug.on("media.volume") { MediaUI.shared.volumeOpen = $0["on"] != "0" }
         Debug.on("media.state") { _ in
             let s = NowPlayingState.shared
             Debug.reply("source=\(NowPlayingSources.shared.source) playing=\(s.isPlaying) title=\(s.title)")
@@ -267,6 +298,14 @@ enum MediaModule {
         precondition(MediaController.names(title: "Song", artist: "", app: "Safari") == ("Song", "Safari"), "app under an artist-less title")
         precondition(MediaController.names(title: "", artist: "", app: nil) == ("Now Playing", ""), "no app either")
         precondition(MediaController.names(title: "Song", artist: "Band", app: nil) == ("Song", "Band"), "tagged track untouched")
+
+        // Outputs use the HUD's classification; plain speakers stay speakers.
+        let speakers = HUDOutput.preset("speakers"), usb = HUDOutput(name: "USB Audio", transport: kAudioDeviceTransportTypeUSB)
+        precondition(speakers.playerSymbol == "speaker.wave.2.fill" && speakers.playerName == "MacBook Pro Speakers", "built-in speakers")
+        precondition(usb.playerSymbol == "hifispeaker.fill" && usb.playerName == "USB Audio", "external speakers")
+        precondition(HUDOutput.preset("airpodspro").playerName == "AirPods Pro", "AirPods keep their name")
+        precondition(HUDOutput(name: "Studio Display", transport: kAudioDeviceTransportTypeUSB).playerSymbol == "display", "Apple display speakers")
+        precondition(HUDOutput(name: "EarPods", transport: kAudioDeviceTransportTypeUSB).playerSymbol == "earpods", "EarPods")
 
         // Every spectrogram style stays inside the 20 pt wing and visibly follows the levels.
         let wing = CGRect(x: 0, y: 0, width: 20, height: 20)
@@ -327,6 +366,12 @@ enum MediaModule {
         podcast.sourceBundleID = "com.apple.podcasts"
         Gallery.island("media-peek-podcast", item: MediaActivity.item(state: podcast, ui: ui), peeking: true)
         Gallery.island("media-expanded-podcast", item: MediaActivity.item(state: podcast, ui: ui), expanded: true)
+        let volumeUI = MediaUI()
+        (volumeUI.offscreen, volumeUI.volumeOpen, volumeUI.output, volumeUI.volume) = (true, true, .preset("airpodspro"), 0.62)
+        Gallery.island("media-expanded-volume", item: MediaActivity.item(state: playing, ui: volumeUI), expanded: true)
+        let mutedUI = MediaUI()
+        (mutedUI.offscreen, mutedUI.volumeOpen, mutedUI.output, mutedUI.volume, mutedUI.muted) = (true, true, .preset("homepod"), 0.4, true)
+        Gallery.island("media-expanded-muted", item: MediaActivity.item(state: paused, ui: mutedUI), expanded: true)
         Gallery.add("media-progress-gradient", size: CGSize(width: 420, height: 48)) {
             ProgressScrubber(state: other, gradient: true, totalTime: true)
                 .padding(.horizontal, 22)

@@ -1,4 +1,5 @@
 import AVKit
+import CoreAudio
 import SwiftUI
 
 // MARK: - Shared bits
@@ -398,6 +399,68 @@ private struct RoutePicker: NSViewRepresentable {
     func updateNSView(_ nsView: AVRoutePickerView, context: Context) {}
 }
 
+/// The expanded player's output glyph and name: the HUD's classification, with plain speakers drawn as speakers.
+extension HUDOutput {
+    var playerSymbol: String { symbol ?? (transport == kAudioDeviceTransportTypeBuiltIn ? "speaker.wave.2.fill" : "hifispeaker.fill") }
+    var playerName: String { symbol == nil ? name : label }
+}
+
+/// The current output's glyph (slashed while muted); opens the volume row.
+private struct OutputButton: View {
+    let ui: MediaUI
+
+    var body: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.25)) { ui.volumeOpen.toggle() }
+        } label: {
+            Image(systemName: ui.muted ? "speaker.slash.fill" : ui.output.playerSymbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Palette.ink.opacity(ui.volumeOpen ? 1 : 0.72))
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(Palette.ink.opacity(ui.volumeOpen ? 0.14 : 0)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(Pressable())
+    }
+}
+
+/// Output volume in place of the progress bar: mute toggle, level, device name and the AirPlay picker.
+private struct VolumeRow: View {
+    let ui: MediaUI
+
+    var body: some View {
+        let level = ui.volume ?? 0
+        HStack(spacing: 10) {
+            Button { ui.toggleMute() } label: {
+                Image(systemName: ui.muted ? "speaker.slash.fill" : "speaker.wave.3.fill", variableValue: level)
+                    .font(.system(size: 12, weight: .semibold))
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 34, height: 14, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(Pressable())
+            GeometryReader { geo in
+                LevelBar(value: level, tint: Palette.ink.opacity(ui.muted ? 0.35 : 0.88), height: 5)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(DragGesture(minimumDistance: 0).onChanged { ui.setVolume(Double($0.location.x / geo.size.width)) })
+            }
+            .frame(height: 14)
+            .opacity(ui.volume == nil ? 0.4 : 1)
+            .allowsHitTesting(ui.volume != nil)
+            Text(ui.output.playerName).lineLimit(1)
+            if ui.offscreen {
+                Image(systemName: "airplay.audio").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.ink.opacity(0.72))
+            } else {
+                RoutePicker().frame(width: 20, height: 20)
+            }
+        }
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(Palette.muted)
+    }
+}
+
 final class CopyFlash: ObservableObject {
     @Published var copied = false
 }
@@ -442,15 +505,18 @@ struct ExpandedPlayer: View {
                 HStack(spacing: 8) {
                     if let link = ui.link { CopyLinkButton(link: link) }
                     if SpeedMenu.available { SpeedMenu(state: state, ui: ui) }
-                    if ui.offscreen {
-                        Image(systemName: "airplay.audio").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.ink.opacity(0.72))
-                    } else {
-                        RoutePicker().frame(width: 20, height: 20)
-                    }
+                    OutputButton(ui: ui)
                     SourceAppButton(state: state)
                 }
             }
-            ProgressScrubber(state: state, gradient: prefs.gradientProgress, totalTime: prefs.showTotalTime).padding(.top, 14)
+            ZStack {
+                if ui.volumeOpen {
+                    VolumeRow(ui: ui).transition(.opacity)
+                } else {
+                    ProgressScrubber(state: state, gradient: prefs.gradientProgress, totalTime: prefs.showTotalTime).transition(.opacity)
+                }
+            }
+            .padding(.top, 14)
             // Podcasts skip within the episode (15 s back, 30 s ahead) instead of changing track.
             let podcast = state.isPodcast && state.duration > 0
             HStack(spacing: 0) {
@@ -477,6 +543,15 @@ struct ExpandedPlayer: View {
         }
         .padding(EdgeInsets(top: 20, leading: 22, bottom: 14, trailing: 22))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .task {
+            // Outputs come and go (AirPods, AirPlay): poll the default device while the player is open.
+            guard !ui.offscreen else { return }
+            while !Task.isCancelled {
+                ui.refreshOutput()
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+        .onDisappear { if !MediaPreferences.shared.keepVolumeOpen { ui.volumeOpen = false } }
     }
 }
 
@@ -538,6 +613,10 @@ struct MediaSettingsView: View {
                 Toggle(isOn: $prefs.showTotalTime) {
                     Text("Show total duration")
                     Text("Instead of the time left. Clicking the time in the player switches it too.")
+                }
+                Toggle(isOn: $prefs.keepVolumeOpen) {
+                    Text("Keep volume control open")
+                    Text("The output button's volume slider stays out when the player closes and reopens.")
                 }
             }
             Section("Activity") {
