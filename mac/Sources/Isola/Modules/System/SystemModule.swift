@@ -1,3 +1,4 @@
+import CoreBluetooth
 import SwiftUI
 
 /// System events in the island: charging and battery, Low Power Mode, Bluetooth
@@ -19,19 +20,25 @@ enum SystemModule {
         SettingsRegistry.add("live", title: "Live Activities", symbol: "bolt.badge.clock", order: 30) { SystemSettingsView() }
     }
 
-    /// Touching IOBluetooth triggers the Bluetooth permission prompt, so wait until
-    /// onboarding has explained it. The connect setting only gates announcements: device
-    /// low-battery warnings and the Lock Screen connectivity widget need the monitor too.
+    /// IOBluetooth blocks the main thread on the permission prompt while access is undecided,
+    /// so start only once onboarding is done AND Bluetooth access is already granted (reading
+    /// CBManager.authorization never prompts). The connect setting only gates announcements:
+    /// device low-battery warnings and the Lock Screen connectivity widget need the monitor too.
+    private static var bluetoothStarted = false
+
+    static func startBluetoothIfAllowed() {
+        guard !bluetoothStarted, UserDefaults.standard.bool(forKey: "onboarded"), CBManager.authorization == .allowedAlways else { return }
+        bluetoothStarted = true
+        BluetoothMonitor.shared.start()
+    }
+
     private static func startBluetoothWhenOnboarded() {
-        var started = false
-        let tryStart = {
-            guard !started, UserDefaults.standard.bool(forKey: "onboarded") else { return }
-            started = true
-            BluetoothMonitor.shared.start()
-        }
-        tryStart()
-        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { tryStart() }
+        startBluetoothIfAllowed()
+        // Onboarding answers the prompt (BluetoothPrompt); System Settings may grant it later.
+        for name in [UserDefaults.didChangeNotification, NSApplication.didBecomeActiveNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { startBluetoothIfAllowed() }
+            }
         }
     }
 

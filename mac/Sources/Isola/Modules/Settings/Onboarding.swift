@@ -162,6 +162,7 @@ final class BluetoothPrompt: NSObject, CBCentralManagerDelegate {
         MainActor.assumeIsolated {
             done?()
             done = nil
+            SystemModule.startBluetoothIfAllowed()
         }
     }
 }
