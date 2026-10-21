@@ -171,6 +171,17 @@ enum FineTuneFeedback {
     }
 }
 
+extension View {
+    /// Tahoe: Liquid Glass buttons on macOS 26 and later, the bordered look before.
+    @ViewBuilder func glassButton(prominent: Bool = false) -> some View {
+        if #available(macOS 26, *) {
+            if prominent { buttonStyle(.glassProminent) } else { buttonStyle(.glass) }
+        } else {
+            if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
+        }
+    }
+}
+
 struct GeneralPage: View {
     @Bindable var nav: SettingsNav
     @Bindable var prefs = Preferences.shared
@@ -211,6 +222,7 @@ struct GeneralPage: View {
                         prefs.widthTweak = 0
                         prefs.heightTweak = 0
                     }
+                    .glassButton()
                     .disabled(prefs.widthTweak == 0 && prefs.heightTweak == 0)
                 }
             }
@@ -312,15 +324,9 @@ struct AboutPage: View {
                 Text("Dynamic Island for your Mac").foregroundStyle(.secondary)
                 Text("Version \(version) (\(build))").font(.callout).foregroundStyle(.tertiary)
             }
-            HStack(spacing: 10) {
-                Link("Website", destination: License.website)
-                Text("·").foregroundStyle(.tertiary)
-                Link("Changelog", destination: License.website.appendingPathComponent("changelog"))
-                Text("·").foregroundStyle(.tertiary)
-                Link("FAQs", destination: License.website.appendingPathComponent("faqs"))
-            }
-            .font(.callout)
+            links.font(.callout)
             Button("Show Welcome Again") { OnboardingWindow.show() }
+                .glassButton()
                 .padding(.top, 4)
             Spacer()
             Text("On macOS 26 or later you can hide the menu bar icon from System Settings › Menu Bar.")
@@ -331,6 +337,28 @@ struct AboutPage: View {
                 .padding(.bottom, 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder private var links: some View {
+        let website = License.website
+        if #available(macOS 26, *) {
+            // Tahoe: Liquid Glass capsules that blend as one group.
+            GlassEffectContainer {
+                HStack(spacing: 8) {
+                    Link("Website", destination: website).buttonStyle(.glass)
+                    Link("Changelog", destination: website.appendingPathComponent("changelog")).buttonStyle(.glass)
+                    Link("FAQs", destination: website.appendingPathComponent("faqs")).buttonStyle(.glass)
+                }
+            }
+        } else {
+            HStack(spacing: 10) {
+                Link("Website", destination: website)
+                Text("·").foregroundStyle(.tertiary)
+                Link("Changelog", destination: website.appendingPathComponent("changelog"))
+                Text("·").foregroundStyle(.tertiary)
+                Link("FAQs", destination: website.appendingPathComponent("faqs"))
+            }
+        }
     }
 }
 
