@@ -18,9 +18,12 @@ final class Weather: NSObject, CLLocationManagerDelegate {
         refresh()
     }
 
-    private var locationAuthorized: Bool {
+    var locationAuthorized: Bool {
         [.authorizedAlways, .authorized].contains(location.authorizationStatus)
     }
+
+    /// The last fix while it's recent (weather refreshes take one every 30 min): where travel times start.
+    var lastLocation: CLLocation? { location.location.flatMap { $0.timestamp.timeIntervalSinceNow > -45 * 60 ? $0 : nil } }
 
     func refresh() {
         let prefs = CalendarPreferences.shared

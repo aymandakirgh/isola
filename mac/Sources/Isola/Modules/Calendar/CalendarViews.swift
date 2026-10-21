@@ -34,13 +34,16 @@ enum CalendarItems {
         }
     }
 
-    static func leave(_ e: CalendarEvent, now: Date) -> IslandItem {
-        IslandItem(id: leaveID, kind: .notification) {
-            Image(systemName: "car.fill").islandSymbol(15).foregroundStyle(Palette.amber).padding(.leading, 11)
+    /// `travel` is the Apple Maps estimate, when there is one ("25m by car" in the peek).
+    static func leave(_ e: CalendarEvent, now: Date, travel: TimeInterval? = nil) -> IslandItem {
+        let mode = CalendarPreferences.shared.travelMode
+        let trip = travel.map { "\(CalendarText.countdown(to: now.addingTimeInterval(max($0, 60)), from: now)) \(mode.phrase)" }
+        return IslandItem(id: leaveID, kind: .notification) {
+            Image(systemName: mode.symbol).islandSymbol(15).foregroundStyle(Palette.amber).padding(.leading, 11)
         } trailing: {
             CountdownText(to: e.start).padding(.trailing, 11)
         }
-        .peek(always: true) { LeavePeek(event: e) }
+        .peek(always: true) { LeavePeek(event: e, trip: trip) }
         .expanded(size: panelSize) { LiveCalendarPanel() }
     }
 
@@ -128,10 +131,12 @@ private struct EventPeek: View {
 
 private struct LeavePeek: View {
     var event: CalendarEvent
+    var trip: String?
     var body: some View {
         Marquee {
             HStack(spacing: 4) {
                 Text("Time to leave").foregroundStyle(Palette.amber)
+                if let trip { Text("· \(trip)").foregroundStyle(Palette.amber) }
                 Text("· \(event.title)").foregroundStyle(Palette.ink)
                 if let location = event.location { Text("· \(location)") }
             }
@@ -470,13 +475,27 @@ struct CalendarSettingsView: View {
                     }
                 }
             }
-            Section("Upcoming events") {
+            Section {
                 Toggle("Show upcoming events in the island", isOn: $prefs.liveActivity)
                 Stepper("Appear \(prefs.leadMinutes) minutes before they start", value: $prefs.leadMinutes, in: 1...60)
-                Toggle("Time to leave alerts for events with a location", isOn: $prefs.timeToLeave)
-                Stepper("Alert \(prefs.leaveMinutes) minutes before", value: $prefs.leaveMinutes, in: 5...90, step: 5)
-                    .disabled(!prefs.timeToLeave)
                 Toggle("Show the date when nothing else is running", isOn: $prefs.idleActivity)
+                Toggle("Time to leave alerts for events with a location", isOn: $prefs.timeToLeave)
+                Group {
+                    Picker("Travel by", selection: $prefs.travelMode) {
+                        ForEach(TravelMode.allCases) { Text($0.title).tag($0) }
+                    }
+                    Stepper("Add \(prefs.leaveBuffer) minutes to the travel time", value: $prefs.leaveBuffer, in: 0...30, step: 5)
+                    Stepper("Without a travel time, alert \(prefs.leaveMinutes) minutes before", value: $prefs.leaveMinutes, in: 5...90, step: 5)
+                }
+                .disabled(!prefs.timeToLeave)
+            } header: {
+                Text("Upcoming events")
+            } footer: {
+                // Never asks for location itself: the weather's "Use Current Location" does.
+                Text(Weather.shared.locationAuthorized
+                    ? "Time to leave uses the Apple Maps travel time from your current location."
+                    : "Time to leave uses travel time once Isola has your location (Weather › Use Current Location); until then it alerts a fixed time before.")
+                    .foregroundStyle(.secondary)
             }
             Section("Display") {
                 Toggle("Show declined events", isOn: $prefs.showDeclined)

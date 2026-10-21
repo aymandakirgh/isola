@@ -15,6 +15,12 @@ final class CalendarPreferences {
     /// Minutes before an event starts that its live activity appears.
     var leadMinutes: Int = load("calendar.leadMinutes", 10) { didSet { store.set(leadMinutes, forKey: "calendar.leadMinutes"); CalendarSource.shared.evaluate() } }
     var timeToLeave: Bool = load("calendar.timeToLeave", true) { didSet { store.set(timeToLeave, forKey: "calendar.timeToLeave") } }
+    /// With location access, alerts come at start − travel time − `leaveBuffer` minutes…
+    var travelMode: TravelMode = TravelMode(rawValue: load("calendar.travelMode", "driving")) ?? .driving {
+        didSet { store.set(travelMode.rawValue, forKey: "calendar.travelMode") }
+    }
+    var leaveBuffer: Int = load("calendar.leaveBuffer", 5) { didSet { store.set(leaveBuffer, forKey: "calendar.leaveBuffer") } }
+    /// …otherwise a fixed number of minutes before the start.
     var leaveMinutes: Int = load("calendar.leaveMinutes", 15) { didSet { store.set(leaveMinutes, forKey: "calendar.leaveMinutes") } }
 
     // Which events show
@@ -91,7 +97,12 @@ enum CalendarModule {
                 id: "debug-leave-\(UUID().uuidString)", title: args["title"] ?? "Dinner at Marta's", start: start,
                 end: start.addingTimeInterval(3600), calendarColor: .systemOrange, location: args["location"] ?? "Via Roma 12"
             )
-            Island.shared.post(CalendarItems.leave(event, now: Date()), duration: 6)
+            let travel = args["travel"].flatMap(Double.init).map { $0 * 60 }  // minutes, as if from Apple Maps
+            Island.shared.post(CalendarItems.leave(event, now: Date(), travel: travel), duration: 6)
+        }
+        Debug.on("cal.state") { _ in
+            let state = CalendarState.shared
+            Debug.reply("authorized=\(state.authorized) today=\(state.today.count) location=\(Weather.shared.locationAuthorized) travel: \(TravelTime.shared.report)")
         }
         Debug.on("cal.clear") { _ in
             CalendarModel.shared.debugEvents = []
@@ -118,6 +129,7 @@ enum CalendarModule {
         WeatherCode.selfCheck()
         CalendarText.selfCheck()
         CalendarSource.selfCheck()
+        TravelTime.selfCheck()
 
         let now = Date()
         let day = Calendar.current.startOfDay(for: now)
@@ -160,6 +172,7 @@ enum CalendarModule {
             Gallery.island("calendar-leave-\(suffix)", item: CalendarItems.leave(dinner, now: now), geometry: g)
             Gallery.island("calendar-timer-\(suffix)", item: CalendarItems.timer(snapshot: timer), geometry: g)
         }
+        Gallery.island("calendar-leave-travel", item: CalendarItems.leave(dinner, now: now, travel: 25 * 60))
         Gallery.island("calendar-activity-peek", item: CalendarItems.event(review, panel: panel), peeking: true)
         Gallery.island("calendar-activity-peek-nocolor", item: CalendarItems.event(review, panel: panel, colors: false), peeking: true)
         Gallery.island("calendar-timer-paused", item: CalendarItems.timer(snapshot: TimerSnapshot(end: timer.end, duration: timer.duration, paused: 252)))
@@ -169,7 +182,7 @@ enum CalendarModule {
         Gallery.island("calendar-expanded-empty", item: CalendarItems.event(review, panel: emptyPanel), expanded: true)
         Gallery.island("calendar-expanded-multiday", item: CalendarItems.event(review, panel: multiDayPanel), expanded: true)
         Gallery.island("calendar-expanded-timer", item: CalendarItems.event(review, panel: timerPanel), expanded: true, geometry: .notchPreview)
-        Gallery.add("calendar-settings", size: CGSize(width: 560, height: 980)) {
+        Gallery.add("calendar-settings", size: CGSize(width: 560, height: 1120)) {
             CalendarSettingsView().background(Color(nsColor: .windowBackgroundColor))
         }
     }

@@ -107,11 +107,14 @@ final class CalendarSource {
         }
 
         guard prefs.timeToLeave else { return }
-        for e in CalendarState.shared.today where !(e.location ?? "").isEmpty && !e.isAllDay && !leaveNotified.contains(e.id) {
-            let lead = e.start.timeIntervalSince(now)
-            if lead > 0, lead <= Double(prefs.leaveMinutes) * 60 {
+        for e in CalendarState.shared.today where e.start > now && !e.isAllDay && !leaveNotified.contains(e.id) {
+            // A place to get to: a location that is a video-call link needs no travel.
+            guard let location = e.location, !location.isEmpty, Self.meetingURL(in: [location]) == nil else { continue }
+            let travel = TravelTime.shared.estimate(for: e, place: ekEvents[e.id]?.structuredLocation?.geoLocation, now: now)
+            let buffer = Double(prefs.leaveBuffer) * 60, fallback = Double(prefs.leaveMinutes) * 60
+            if TravelTime.isTimeToLeave(now: now, start: e.start, travel: travel, buffer: buffer, fallback: fallback) {
                 leaveNotified.insert(e.id)
-                Island.shared.post(CalendarItems.leave(e, now: now), duration: 6)
+                Island.shared.post(CalendarItems.leave(e, now: now, travel: travel), duration: 6)
                 break
             }
         }
@@ -138,11 +141,12 @@ final class CalendarSource {
         "facetime.apple.com", "whereby.com", "meet.jit.si", "chime.aws", "gotomeeting.com", "around.co",
     ]
 
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
     /// The first video-call link in an event's URL, location or notes.
     static func meetingURL(in texts: [String?]) -> URL? {
-        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         for text in texts.compactMap({ $0 }) {
-            for match in detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) ?? [] {
+            for match in linkDetector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) ?? [] {
                 guard let url = match.url, let host = url.host?.lowercased() else { continue }
                 if meetingHosts.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return url }
             }
