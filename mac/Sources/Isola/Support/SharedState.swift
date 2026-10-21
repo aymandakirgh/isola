@@ -18,8 +18,8 @@ final class NowPlayingState {
     var elapsed: TimeInterval = 0
     /// When `elapsed` was sampled, for live interpolation.
     var elapsedAt = Date()
-    /// Last local seek; snapshots that arrive just after it may still carry the old position.
-    var seekedAt = Date.distantPast
+    /// Last local seek or speed change; snapshots that arrive just after it may still carry the old values.
+    var adjustedAt = Date.distantPast
     var rate: Double = 1
     var shuffle = false
     var repeatMode = 0  // 0 off, 1 one, 2 all
@@ -40,7 +40,7 @@ final class NowPlayingState {
     func seek(to time: TimeInterval) {
         elapsed = max(0, duration > 0 ? min(time, duration) : time)
         elapsedAt = Date()
-        seekedAt = elapsedAt
+        adjustedAt = elapsedAt
         commands.seek(elapsed)
     }
 
@@ -48,6 +48,7 @@ final class NowPlayingState {
     func setRate(_ value: Double) {
         elapsed = currentElapsed()
         elapsedAt = Date()
+        adjustedAt = elapsedAt
         rate = value
         commands.setRate(value)
     }

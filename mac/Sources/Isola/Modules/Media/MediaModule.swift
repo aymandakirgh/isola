@@ -167,13 +167,13 @@ final class MediaController {
         }
         state.isPlaying = s.isPlaying
         state.duration = s.duration
-        // A local seek already moved the bar; give the source a second to report it.
-        if trackChanged || Date().timeIntervalSince(state.seekedAt) > 1 {
+        // A local seek or speed change already shows; give the source a second to report it.
+        if trackChanged || Date().timeIntervalSince(state.adjustedAt) > 1 {
             state.elapsed = s.elapsed
             state.elapsedAt = s.timestamp
+            // Sources report rate 0 while paused: keep the chosen speed until playback says otherwise.
+            if s.isPlaying || s.bundleID != state.sourceBundleID { state.rate = s.rate > 0 ? s.rate : 1 }
         }
-        // Sources report rate 0 while paused: keep the chosen speed until playback says otherwise.
-        if s.isPlaying || s.bundleID != state.sourceBundleID { state.rate = s.rate > 0 ? s.rate : 1 }
         state.shuffle = s.shuffle
         state.repeatMode = s.repeatMode
         state.sourceBundleID = s.bundleID
