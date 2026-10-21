@@ -138,7 +138,9 @@
 
 /* Free stand-in for the reference clock face: Nunito fitted to its digit height and tracking.
    Only its digits and colon (Google Fonts' text=0123456789: subset), served from here so the page
-   makes no third-party request. */
+   makes no third-party request. The rule is the one Google serves browsers for it, range included:
+   with no U+20 in the range the fallback font sets the line's height and baseline, as it did when
+   the font came from Google. Adding U+20, or dropping the range, moves the clock up 1px. */
 @font-face {
   font-family: "Nunito";
   font-style: normal;

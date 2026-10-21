@@ -42,15 +42,17 @@ export default function Purchased({ params, search }: PageProps) {
     const pick = (...keys: string[]) =>
       keys.map((k) => search.get(k)?.trim()).find(Boolean) ?? "";
     const given = pick("code", "license_key", "licenseKey");
-    setEmail(pick("email"));
+    // Only shown: anyone can put any address in a link, so it never goes to the licence server.
+    const address = pick("email");
+    setEmail(address);
     setCode(given);
     // The no-charge demo checkout mints a real licence (the shared demo key without the server).
     if (params.id !== "demo" || given) return;
     let live = true;
-    mintDemoLicense(pick("email")).then((license) => {
+    mintDemoLicense().then((key) => {
       if (!live) return;
-      setEmail(license.email || "you@example.com");
-      setCode(license.key);
+      setEmail(address || "you@example.com");
+      setCode(key);
     });
     return () => {
       live = false;

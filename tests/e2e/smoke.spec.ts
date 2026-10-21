@@ -58,6 +58,24 @@ test("the purchase page shows a license key (the shared demo key without /api)",
   ).toBeVisible();
 });
 
+test("the demo checkout shows an address from the link but never sends it", async ({
+  page,
+}) => {
+  const sent: unknown[] = [];
+  await page.route("**/api/license/demo", (route) => {
+    sent.push(route.request().postDataJSON());
+    return route.fulfill({
+      status: 201,
+      json: { key: "ISOLA-W7UD-A389-NXLG", email: null },
+    });
+  });
+  await page.goto("/purchased/demo?email=someone.else@example.com");
+  await expect(page.getByText("ISOLA-W7UD-A389-NXLG")).toBeVisible();
+  await expect(page.getByText("someone.else@example.com")).toBeVisible();
+  expect(sent.length).toBeGreaterThan(0);
+  for (const body of sent) expect(body).toEqual({});
+});
+
 test("the download link never carries the license key", async ({ page }) => {
   await page.goto("/purchased/demo?code=ISOLA-W7UD-A389-NXLG");
   await expect(page.getByText("ISOLA-W7UD-A389-NXLG")).toBeVisible();
@@ -94,8 +112,15 @@ test("the clock's font comes from this site, not Google Fonts", async ({
 
 test("the privacy policy says what is kept", async ({ page }) => {
   await page.goto("/privacy");
-  await expect(page.getByText(/hashed hardware ID/)).toBeVisible();
-  await expect(page.getByText(/no data/i)).toHaveCount(0);
+  await expect(
+    page.getByText(/a random ID .* when it was activated and last seen\./),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      /uses it briefly, in memory, to rate-limit requests, and we never store it\./,
+    ),
+  ).toBeVisible();
+  await expect(page.getByText(/no data|hardware ID/i)).toHaveCount(0);
   await expect(page.locator('meta[name="description"]')).toHaveAttribute(
     "content",
     "What Isola keeps for your license, and why",
@@ -139,7 +164,7 @@ test("navigating to FAQs swaps to the dark theme", async ({
     await expect(page.locator('header a[href="/faqs"]')).toHaveCount(0);
 });
 
-test("license recovery shakes on a bad address, and on a good one when nothing could be sent", async ({
+test("license recovery shakes on a bad address, and answers a good one with or without /api", async ({
   page,
 }) => {
   await page.goto("/recover");
@@ -148,12 +173,25 @@ test("license recovery shakes on a bad address, and on a good one when nothing c
   await input.press("Enter");
   await expect(page.locator(".animate-shake")).toBeAttached();
   await expect(input).toHaveValue("");
-  // `vite preview` serves no /api: the request fails, and the address stays for another try.
   await input.fill("you@example.com");
   await expect(page.locator(".animate-shake")).toHaveCount(0);
   await input.press("Enter");
-  await expect(page.locator(".animate-shake")).toBeAttached();
-  await expect(input).toHaveValue("you@example.com");
+  // A licence server answers with mail on or off; without one (`vite preview`), or when it can't
+  // be reached, the page says so and keeps the address for another try.
+  const unreachable = page.getByText(/^Couldn’t reach the server\.$/);
+  await expect(
+    page
+      .getByText(
+        /^(If that address has a license, it’s on its way|License e-mails aren’t set up on this demo yet)\.$/,
+      )
+      .or(unreachable),
+  ).toBeVisible();
+  if (await unreachable.isVisible()) {
+    await expect(input).toHaveValue("you@example.com");
+    await expect(page.locator(".animate-shake")).toHaveCount(0);
+    await input.fill("you@example.org");
+    await expect(page.getByText(/^Enter your email address/)).toBeVisible();
+  }
 });
 
 for (const [mail, copy] of [

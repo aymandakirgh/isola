@@ -50,8 +50,9 @@ export default function Privacy() {
           </p>
           <Section title="What we keep">
             Your license key, and the e-mail address you give at checkout if you
-            give one. For each Mac you activate: a hashed hardware ID (never the
-            serial number), the Mac’s name and its model.
+            give one. For each Mac you activate: a random ID the app makes for
+            it, the Mac’s name and model, and when it was activated and last
+            seen.
           </Section>
           <Section title="Why">
             To hold each license to three Macs, to list them in Settings ›
@@ -61,8 +62,9 @@ export default function Privacy() {
           <Section title="Where">
             With Vercel, which hosts this site and keeps licenses in private
             storage (Vercel Blob). Like any host, it sees your IP address with
-            each request, {BRAND}’s daily update check included; we don’t store
-            it. Once license e-mails are switched on, they go out through
+            each request, {BRAND}’s daily checks included; the license server
+            uses it briefly, in memory, to rate-limit requests, and we never
+            store it. Once license e-mails are switched on, they go out through
             Resend. The demo on this site plays its songs straight from Apple
             Music, and in the app, weather and Spotify features talk to those
             services directly. Everything else stays on your Mac, or in your own

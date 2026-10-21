@@ -1,5 +1,5 @@
 // Client for the licence server (api/license.ts). `vite preview` has no /api: minting falls back to
-// the shared demo key, and recovery reports that nothing could be sent.
+// the shared demo key, and recovery says the server couldn't be reached.
 import { wait } from "./frame";
 
 /** The server's rule: a plain address, nothing a mail API could read as a name or a second address. */
@@ -23,15 +23,13 @@ async function post<T>(action: string, body: object): Promise<T> {
   return response.json();
 }
 
-/** POST /api/license/demo — a new licence from the no-charge demo checkout. */
-export async function mintDemoLicense(email: string) {
+/** POST /api/license/demo — a new licence key from the no-charge demo checkout, which asks for no
+ *  e-mail address, so none is bound to it. */
+export async function mintDemoLicense() {
   try {
-    return await post<{ key: string; email: string | null }>(
-      "demo",
-      email ? { email } : {},
-    );
+    return (await post<{ key: string }>("demo", {})).key;
   } catch {
-    return { key: DEMO_KEY, email: email || null };
+    return DEMO_KEY;
   }
 }
 

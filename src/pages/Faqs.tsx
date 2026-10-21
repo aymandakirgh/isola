@@ -89,8 +89,9 @@ export default function Faqs() {
             >
               <p>
                 Open the License tab in Settings and deactivate any Mac you no
-                longer use. A Mac can remove itself or any Mac activated after
-                it, so your first Mac can always tidy up the list.
+                longer use. A Mac can remove itself, any Mac activated after it,
+                and any Mac not seen for 30 days, so your first Mac can always
+                tidy up the list.
               </p>
               <p className={DIM}>
                 Need a complete reset instead? Just reach out.
@@ -168,8 +169,9 @@ export default function Faqs() {
               <p>
                 Only what your license needs: the key, the e-mail address you
                 give at checkout if you give one, and for each activated Mac a
-                hashed hardware ID, its name and its model. Nothing else is
-                kept.
+                random ID, its name and model, and when it was activated and
+                last seen. Your IP address is used briefly, in memory, to
+                rate-limit requests, and we never store it.
               </p>
               <p className={DIM}>
                 The{" "}

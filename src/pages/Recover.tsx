@@ -159,16 +159,14 @@ export default function Recover() {
   const input = useRef<HTMLInputElement>(null);
   const [email, setEmail] = useState("");
   const [error, setError] = useState(false);
+  const [unreachable, setUnreachable] = useState(false);
   const [sent, setSent] = useState(false);
   const [mail, setMail] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const submit = async () => {
-    const fail = () => {
-      setError(true);
-      input.current?.focus();
-    };
     setError(false);
+    setUnreachable(false);
     setLoading(true);
     try {
       const reply = await requestLicenseEmail(email);
@@ -177,12 +175,14 @@ export default function Recover() {
         return setSent(true);
       }
       setEmail("");
-      fail();
+      setError(true);
     } catch {
-      fail();
+      // Nothing wrong with the address: it stays, for another try.
+      setUnreachable(true);
     } finally {
       setLoading(false);
     }
+    input.current?.focus();
   };
 
   return (
@@ -245,8 +245,16 @@ export default function Recover() {
                 >
                   <div>
                     <p className="text-2xl font-bold">Lost your license?</p>
-                    <p className="text-lg font-semibold text-orange-950/60">
-                      Enter your email address{md ? " below" : ""}
+                    <p
+                      aria-live="polite"
+                      className={cn(
+                        "text-lg font-semibold",
+                        unreachable ? "text-rose-800/80" : "text-orange-950/60",
+                      )}
+                    >
+                      {unreachable
+                        ? "Couldn’t reach the server."
+                        : `Enter your email address${md ? " below" : ""}`}
                     </p>
                   </div>
                   <div className="flex w-full items-center justify-center space-x-3">
@@ -263,6 +271,7 @@ export default function Recover() {
                       onValueChange={(v) => {
                         setEmail(v);
                         setError(false);
+                        setUnreachable(false);
                       }}
                       onKeyUp={(e) => e.key === "Enter" && submit()}
                       onBlur={() => setError(false)}
