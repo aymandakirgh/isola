@@ -252,6 +252,7 @@ struct MediaPeek: View {
                 if !prefs.hideNoteSymbol {
                     Image(systemName: live || state.isPodcast ? "mic.fill" : "music.note").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Color(white: 0.45))
                 }
+                if state.inTransition { SourceTag(text: "AutoMix") }
                 let title = displayTitle(state)
                 if !title.isEmpty { Text(title) }
                 if !title.isEmpty, !state.artist.isEmpty { Text("∙").foregroundStyle(Color(white: 0.45)) }
@@ -505,19 +506,20 @@ private struct VolumeRow: View {
 }
 
 final class CopyFlash: ObservableObject {
-    @Published var copied = false
+    /// Result of the last copy, shown briefly.
+    @Published var copied: Bool?
 }
 
 private struct CopyLinkButton: View {
-    let link: URL
+    let state: NowPlayingState
     @StateObject private var flash = CopyFlash()
 
     var body: some View {
-        ControlIcon(symbol: flash.copied ? "checkmark" : "link", size: 12, width: 24) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(link.absoluteString, forType: .string)
-            flash.copied = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { flash.copied = false }
+        ControlIcon(symbol: flash.copied.map { $0 ? "checkmark" : "xmark" } ?? "link", size: 12, width: 24) {
+            state.commands.copyLink { ok in
+                flash.copied = ok
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { flash.copied = nil }
+            }
         }
     }
 }
@@ -535,6 +537,31 @@ private struct PlayerArtwork: View {
             .scaleEffect(state.isPlaying ? 1 : 0.94)
             .animation(.easeInOut(duration: 0.4), value: state.isPlaying)
             .overlay { if prefs.artworkGlare, !ui.offscreen { PointerTracker { ui.glarePoint = $0 } } }
+            .onTapGesture { state.commands.openSource() }
+    }
+}
+
+private struct LikeButton: View {
+    let state: NowPlayingState
+
+    var body: some View {
+        ControlIcon(symbol: state.liked ? "heart.fill" : "heart", size: 12, width: 24) { state.commands.toggleLike() }
+            .contentTransition(.symbolEffect(.replace))
+    }
+}
+
+/// "Lossless", "Dolby Atmos" or "AutoMix", in small outlined capitals.
+private struct SourceTag: View {
+    let text: String
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(.system(size: 7.5, weight: .bold))
+            .foregroundStyle(Palette.muted)
+            .padding(.horizontal, 4)
+            .frame(height: 12)
+            .overlay(Capsule().strokeBorder(Palette.muted.opacity(0.55), lineWidth: 0.75))
+            .fixedSize()
     }
 }
 
@@ -552,13 +579,17 @@ struct ExpandedPlayer: View {
                         Text(displayTitle(state)).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
                         if state.isExplicit { ExplicitBadge() }
                     }
-                    if !state.artist.isEmpty {
-                        Text(state.artist).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.muted).lineLimit(1)
+                    HStack(spacing: 6) {
+                        if !state.artist.isEmpty {
+                            Text(state.artist).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.muted).lineLimit(1)
+                        }
+                        if let tag = state.inTransition ? "AutoMix" : state.audioFormat { SourceTag(text: tag) }
                     }
                 }
                 Spacer(minLength: 6)
                 HStack(spacing: 8) {
-                    if let link = ui.link { CopyLinkButton(link: link) }
+                    if state.canLike { LikeButton(state: state) }
+                    if state.canCopyLink { CopyLinkButton(state: state) }
                     if SpeedMenu.available { SpeedMenu(state: state, ui: ui) }
                     OutputButton(ui: ui)
                     SourceAppButton(state: state)
@@ -697,7 +728,7 @@ struct MediaSettingsView: View {
             }
             Section("Source") {
                 LabeledContent("Now playing", value: sourceDescription)
-                Text("Music and Spotify are read with AppleScript when macOS withholds system now-playing info; the first use asks for Automation access.")
+                Text("Music and Spotify are read with AppleScript only when macOS withholds system now-playing info and Automation access is already granted. Liking in Music and copying a Spotify or browser link ask for it the first time.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

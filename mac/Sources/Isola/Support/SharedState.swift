@@ -25,6 +25,15 @@ final class NowPlayingState {
     var repeatMode = 0  // 0 off, 1 one, 2 all
     var sourceBundleID: String?
     var isExplicit = false
+    /// The source takes a like (Music favourite, MediaRemote LikeTrack).
+    var canLike = false
+    var liked = false
+    /// Apple Music AutoMix is crossfading into the next track.
+    var inTransition = false
+    /// "Lossless", "Hi-Res Lossless" or "Dolby Atmos" when the player reports its stream format.
+    var audioFormat: String?
+    /// A link is known, or the player can be asked for one (Spotify, browser tabs).
+    var canCopyLink = false
     var hasTrack: Bool { !title.isEmpty || !artist.isEmpty }
     var isPodcast: Bool { sourceBundleID == "com.apple.podcasts" }
 
@@ -62,7 +71,11 @@ struct MediaCommands {
     var toggleShuffle: () -> Void = {}
     var cycleRepeat: () -> Void = {}
     var setRate: (Double) -> Void = { _ in }
+    /// Brings the player forward (for a browser, the tab that plays).
     var openSource: () -> Void = {}
+    var toggleLike: () -> Void = {}
+    /// Puts the track's link on the pasteboard, asking the player when needed; reports success.
+    var copyLink: (@escaping (Bool) -> Void) -> Void = { $0(false) }
 }
 
 @MainActor @Observable

@@ -183,6 +183,11 @@ final class MediaController {
         state.repeatMode = s.repeatMode
         state.sourceBundleID = s.bundleID
         state.isExplicit = s.explicit
+        state.canLike = s.canLike
+        state.liked = s.liked ?? false
+        state.inTransition = s.inTransition
+        state.audioFormat = s.audioFormat
+        state.canCopyLink = s.link != nil || s.canFetchLink
         MediaUI.shared.link = s.link
 
         if trackChanged { withAnimation(.easeInOut(duration: 0.5)) { MediaUI.shared.flipped.toggle() } }
@@ -290,9 +295,13 @@ enum MediaModule {
         Debug.on("media.end") { _ in sim.stop() }
         Debug.on("media.pref") { args in for (k, v) in args { MediaPreferences.shared.set(k, v) } }
         Debug.on("media.volume") { MediaUI.shared.volumeOpen = $0["on"] != "0" }
+        Debug.on("media.like") { _ in NowPlayingState.shared.commands.toggleLike() }
+        Debug.on("media.open") { _ in NowPlayingState.shared.commands.openSource() }
+        Debug.on("media.copylink") { _ in NowPlayingState.shared.commands.copyLink { _ in } }  // then: pbpaste
         Debug.on("media.state") { _ in
             let s = NowPlayingState.shared
-            Debug.reply("source=\(NowPlayingSources.shared.source) playing=\(s.isPlaying) title=\(s.title)")
+            Debug.reply("source=\(NowPlayingSources.shared.source) playing=\(s.isPlaying) title=\(s.title) app=\(s.sourceBundleID ?? "-") "
+                + "canLike=\(s.canLike) liked=\(s.liked) link=\(s.canCopyLink) format=\(s.audioFormat ?? "-") automix=\(s.inTransition)")
         }
     }
 
@@ -397,5 +406,18 @@ enum MediaModule {
         Gallery.add("media-settings", size: CGSize(width: 520, height: 940)) {
             MediaSettingsView().background(Color(nsColor: .windowBackgroundColor))
         }
+
+        // Source extras: like, copy link, stream format, AutoMix.
+        NowPlayingExtras.selfCheck()
+        let extras = SimulatedPlayer.sampleState(index: 2, playing: true)
+        extras.canLike = true
+        extras.liked = true
+        extras.canCopyLink = true
+        extras.audioFormat = "Dolby Atmos"
+        Gallery.island("media-expanded-extras", item: MediaActivity.item(state: extras, ui: ui), expanded: true)
+        let automix = SimulatedPlayer.sampleState(index: 0, playing: true)
+        automix.inTransition = true
+        Gallery.island("media-peek-automix", item: MediaActivity.item(state: automix, ui: ui), peeking: true)
+        Gallery.island("media-expanded-automix", item: MediaActivity.item(state: automix, ui: ui), expanded: true)
     }
 }

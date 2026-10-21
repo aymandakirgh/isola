@@ -14,7 +14,7 @@
 	<key>LSUIElement</key><true/>
 	<key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
 	<key>NSHumanReadableCopyright</key><string>Isola — Dynamic Island for your Mac</string>
-	<key>NSAppleEventsUsageDescription</key><string>Isola controls and reads the track playing in Music and Spotify.</string>
+	<key>NSAppleEventsUsageDescription</key><string>Isola controls and reads the track playing in Music and Spotify, and finds the tab that plays in your browser to copy its link or bring it forward.</string>
 	<key>NSCalendarsUsageDescription</key><string>Isola shows your upcoming events in the island and on the Lock Screen.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key><string>Isola shows your upcoming events in the island and on the Lock Screen.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key><string>Isola announces when your headphones and other Bluetooth devices connect.</string>
