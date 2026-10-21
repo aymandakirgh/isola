@@ -27,8 +27,8 @@ enum Modules {
 /// A sample item exercising the core (wings, peek, expanded) — `isolactl demo`.
 @MainActor
 enum CoreDemo {
-    static func item() -> IslandItem {
-        IslandItem(id: "demo", kind: .liveActivity) {
+    static func item(id: String = "demo") -> IslandItem {
+        IslandItem(id: id, kind: .liveActivity) {
             Image(systemName: "sparkles").font(.system(size: 15, weight: .semibold)).padding(.leading, 12)
         } trailing: {
             Text("Hi").font(.system(size: 13, weight: .semibold)).padding(.trailing, 12)
@@ -38,13 +38,27 @@ enum CoreDemo {
     }
 
     static func start() {
+        // `demo id=other` adds a second activity; `key` is the content key a swipe-up dismissal waits on.
         Debug.on("demo") { args in
-            if args["off"] != nil { Island.shared.end("demo") } else { Island.shared.start(item()) }
+            let id = args["id"] ?? "demo"
+            if args["off"] != nil { return Island.shared.end(id) }
+            Island.shared.start(item(id: id).contentKey(args["key"]))
+        }
+        Debug.on("activity.dismiss") { args in
+            if let id = args["id"] ?? Island.shared.currentActivity?.id { Island.shared.dismiss(id) }
+        }
+        Debug.on("island.state") { _ in
+            let island = Island.shared
+            Debug.reply(
+                "current=\(island.current?.id ?? "none") rotation=\(island.sortedActivities.map(\.id)) "
+                    + "dismissed=\(island.dismissed.keys.sorted()) hiddenOn=\(island.suppressed.sorted()) expanded=\(island.expanded)"
+            )
         }
     }
 
     static func gallery() {
         IslandWindows.selfCheck()
+        Island.selfCheck()
         Fullscreen.selfCheck()
         Gallery.island("core-idle-notch", item: nil, geometry: .notchPreview)
         Gallery.island("core-activity-pill", item: item())

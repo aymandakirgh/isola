@@ -123,7 +123,7 @@ final class MediaController {
         let island = Island.shared
         if state.isPlaying {
             idleTimer?.invalidate()
-            if !island.isRunning("media") { island.start(MediaActivity.item(state: .shared, ui: .shared)) }
+            if !island.isRunning("media") || peek { island.start(MediaActivity.item(state: .shared, ui: .shared)) }
             if peek, island.current?.id == "media" { island.quickPeek(true, for: 2) }
             return
         }
@@ -152,6 +152,7 @@ enum MediaActivity {
         .peek(onHover: true) { MediaPeek(state: state) }
         .expanded(size: CGSize(width: 420, height: 162)) { ExpandedPlayer(state: state, ui: ui) }
         .onOptionTap { state.commands.togglePlay() }
+        .contentKey("\(state.title)\u{1f}\(state.artist)")
         .onSwipe { direction in
             switch direction {
             case .right: state.commands.next()
