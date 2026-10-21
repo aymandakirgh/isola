@@ -136,7 +136,17 @@
     #f0abfc80;
 }
 
-/* Free stand-in for the reference clock face: Nunito fitted to its digit height and tracking. */
+/* Free stand-in for the reference clock face: Nunito fitted to its digit height and tracking.
+   Only its digits and colon (Google Fonts' text=0123456789: subset), served from here so the page
+   makes no third-party request. */
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("/fonts/nunito-digits.woff2") format("woff2");
+  unicode-range: U+30-3A;
+}
 .font-numeric {
   font-size-adjust: cap-height 0.68;
   letter-spacing: -0.05em;

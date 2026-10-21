@@ -6,7 +6,7 @@
       "destination": "/api/license?action=:action"
     },
     {
-      "source": "/((?!api/|assets/|images/|sounds/|videos/|downloads/|favicon).*)",
+      "source": "/((?!api/|assets/|fonts/|images/|sounds/|videos/|downloads/|favicon).*)",
       "destination": "/"
     }
   ],
