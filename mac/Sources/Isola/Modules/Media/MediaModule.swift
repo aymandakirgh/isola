@@ -45,6 +45,8 @@ final class MediaController {
     private var lastTrackKey = ""
     private var lastSnapshot: NowPlayingSnapshot?
     private var artworkID = ""
+    /// `isolactl media.play app=<bundle id>`: the simulated track claims that app (e.g. com.apple.podcasts).
+    var simulatedApp: String?
 
     private static let browsers: Set<String> = [
         "com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox", "com.microsoft.edgemac", "company.thebrowser.Browser",
@@ -77,6 +79,8 @@ final class MediaController {
     }
 
     func apply(_ snapshot: NowPlayingSnapshot?) {
+        var snapshot = snapshot
+        if SimulatedPlayer.shared.active, let app = simulatedApp { snapshot?.bundleID = app }
         lastSnapshot = snapshot
         // Media without a title or artist (a bare stream, an untagged video) still counts while its app plays it.
         let untitled = snapshot.map { $0.title.isEmpty && $0.artist.isEmpty } ?? true
@@ -197,6 +201,7 @@ enum MediaModule {
         Debug.on("media.play") { args in
             // blank=1: no title or artist, so the player falls back to the app's name.
             let blank = args["blank"] != nil
+            MediaController.shared.simulatedApp = args["app"]
             sim.start(title: blank ? "" : args["title"], artist: blank ? "" : args["artist"], album: args["album"])
         }
         Debug.on("media.pause") { _ in if NowPlayingState.shared.isPlaying { NowPlayingState.shared.commands.togglePlay() } }
@@ -255,6 +260,10 @@ enum MediaModule {
         Gallery.island("media-peek-untitled", item: MediaActivity.item(state: untitled, ui: ui), peeking: true)
         Gallery.island("media-expanded", item: MediaActivity.item(state: playing, ui: ui), expanded: true)
         Gallery.island("media-expanded-paused", item: MediaActivity.item(state: explicitPaused, ui: ui), expanded: true)
+        let podcast = SimulatedPlayer.sampleState(index: 1, playing: true)
+        podcast.sourceBundleID = "com.apple.podcasts"
+        Gallery.island("media-peek-podcast", item: MediaActivity.item(state: podcast, ui: ui), peeking: true)
+        Gallery.island("media-expanded-podcast", item: MediaActivity.item(state: podcast, ui: ui), expanded: true)
         // Entries named "*settings" are snapshotted through a hosting view by the core gallery.
         Gallery.add("media-settings", size: CGSize(width: 520, height: 560)) {
             MediaSettingsView().background(Color(nsColor: .windowBackgroundColor))

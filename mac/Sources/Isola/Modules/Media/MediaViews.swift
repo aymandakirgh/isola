@@ -135,7 +135,7 @@ struct MediaPeek: View {
         Marquee {
             HStack(spacing: 3) {
                 if !prefs.hideNoteSymbol {
-                    Image(systemName: live ? "mic.fill" : "music.note").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Color(white: 0.45))
+                    Image(systemName: live || state.isPodcast ? "mic.fill" : "music.note").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Color(white: 0.45))
                 }
                 let title = displayTitle(state)
                 if !title.isEmpty { Text(title) }
@@ -369,15 +369,25 @@ struct ExpandedPlayer: View {
                 }
             }
             ProgressScrubber(state: state).padding(.top, 14)
+            // Podcasts skip within the episode (15 s back, 30 s ahead) instead of changing track.
+            let podcast = state.isPodcast && state.duration > 0
             HStack(spacing: 0) {
                 ControlIcon(symbol: "shuffle", on: state.shuffle, size: 13) { state.commands.toggleShuffle() }
                 Spacer()
-                ControlIcon(symbol: "backward.fill", size: 17) { state.commands.previous() }
+                if podcast {
+                    ControlIcon(symbol: "gobackward.15", size: 17) { state.seek(to: state.currentElapsed() - 15) }
+                } else {
+                    ControlIcon(symbol: "backward.fill", size: 17) { state.commands.previous() }
+                }
                 Spacer()
                 ControlIcon(symbol: state.isPlaying ? "pause.fill" : "play.fill", size: 24, width: 44) { state.commands.togglePlay() }
                     .contentTransition(.symbolEffect(.replace))
                 Spacer()
-                ControlIcon(symbol: "forward.fill", size: 17) { state.commands.next() }
+                if podcast {
+                    ControlIcon(symbol: "goforward.30", size: 17) { state.seek(to: state.currentElapsed() + 30) }
+                } else {
+                    ControlIcon(symbol: "forward.fill", size: 17) { state.commands.next() }
+                }
                 Spacer()
                 ControlIcon(symbol: state.repeatMode == 1 ? "repeat.1" : "repeat", on: state.repeatMode != 0, size: 13) { state.commands.cycleRepeat() }
             }

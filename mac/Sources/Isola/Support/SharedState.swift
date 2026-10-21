@@ -26,6 +26,7 @@ final class NowPlayingState {
     var sourceBundleID: String?
     var isExplicit = false
     var hasTrack: Bool { !title.isEmpty || !artist.isEmpty }
+    var isPodcast: Bool { sourceBundleID == "com.apple.podcasts" }
 
     /// Commands are wired by the Media module.
     var commands = MediaCommands()
