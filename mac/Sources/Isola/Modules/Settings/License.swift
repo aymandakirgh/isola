@@ -10,13 +10,21 @@ struct LicensedMac: Identifiable, Codable, Equatable {
     var name: String
     var model: String
     var activated: Date
+    /// When the server last heard from it, to the day; nil from a server that doesn't say.
+    var lastSeen: Date?
+
+    /// The server lets any Mac on the key remove one it hasn't heard from in this long.
+    static let staleAfter: TimeInterval = 30 * 24 * 3600
+
+    func stale(at now: Date) -> Bool { now.timeIntervalSince(lastSeen ?? activated) > Self.staleAfter }
 }
 
 /// Trial + licence state. Keys are checked here (format + checksum), then registered with the
-/// website's licence server (api/license.ts), which keeps each key's Macs, up to three. Only a
-/// definite answer changes the licence: 403 (this Mac isn't on the key) or 404 (no such key) takes
-/// it away, 409 turns a fourth Mac down. Anything else (no connection, a throttle, a 5xx, a
-/// checkpoint page, a body that doesn't decode) keeps what this Mac has.
+/// website's licence server (api/license.ts), which keeps each key's Macs, up to three. Only the
+/// server's verdicts, told by their code, change the licence: not_on_key or unknown_key takes it
+/// away, limit turns a fourth Mac down, order refuses to remove an earlier Mac. Anything else (no
+/// connection, a throttle, a 5xx, an unknown route, a checkpoint page, a body that doesn't decode)
+/// keeps what this Mac has.
 @MainActor @Observable
 final class License {
     static let shared = License()
@@ -32,9 +40,10 @@ final class License {
 
     private(set) var key: String?
     private(set) var devices: [LicensedMac]
-    /// The server has this Mac on `key`: false until it says so, e.g. after this Mac's id changed.
+    /// The server has this Mac on `key`: false until it says so, e.g. after preferences came over
+    /// from another Mac.
     private(set) var registered: Bool
-    /// What the licence server last said: "none" (not asked yet), "ok", "refused", "full",
+    /// What the licence server last said: "none" (not asked yet), "ok", "refused", "full", "order",
     /// "offline" (no answer) or "offline-<status>" (an answer that is no verdict).
     private(set) var serverStatus = "none"
     private(set) var firstLaunch: Date
@@ -66,8 +75,9 @@ final class License {
     /// Bumped by every request and every local change: the answer to an older one is dropped.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var syncing = false
-    /// Deactivations the server hasn't confirmed: this Mac, deactivated while the server couldn't
-    /// be reached, or an id this Mac no longer goes by. Retried at every sync until it answers.
+    @ObservationIgnored private var lastSync = Date.distantPast
+    /// Deactivations of this Mac the server hasn't confirmed (deactivated while it couldn't be
+    /// reached). Retried at every sync until it answers.
     @ObservationIgnored private var pending: [Pending]
     private let store: UserDefaults
 
@@ -78,27 +88,19 @@ final class License {
 
     init(store: UserDefaults = .standard) {
         self.store = store
-        let key = store.string(forKey: "license.key")
-        var registered = store.bool(forKey: "license.registered")
-        var pending = store.data(forKey: "license.pending").flatMap { try? JSONDecoder().decode([Pending].self, from: $0) } ?? []
+        key = store.string(forKey: "license.key")
         let stored = store.string(forKey: "license.deviceID"), hardware = Self.hardwareID()
-        let (id, retired) = Self.deviceID(stored: stored, storedHardware: store.string(forKey: "license.deviceHardware"), hardware: hardware)
-        if let key, id != stored {
-            // The server knows this Mac by another id, or not at all: register it again, once the
-            // old id, if it was this Mac's own, is off the key.
-            registered = false
-            if let retired, key != Self.demoKey, !pending.contains(Pending(key: key, id: retired)) {
-                pending.append(Pending(key: key, id: retired))
-            }
-        }
-        self.key = key
-        self.registered = registered
-        self.pending = pending
+        let id = Self.deviceID(stored: stored, storedHardware: store.string(forKey: "license.deviceHardware"), hardware: hardware)
+        // A new id (a first launch, or preferences copied from another Mac) isn't on the server: this
+        // Mac registers under it, and deactivations queued under the old one stay with the Mac it's from.
+        let newID = id != stored
+        registered = !newID && store.bool(forKey: "license.registered")
+        pending = newID ? [] : store.data(forKey: "license.pending").flatMap { try? JSONDecoder().decode([Pending].self, from: $0) } ?? []
         devices = (store.data(forKey: "license.devices")).flatMap { try? JSONDecoder().decode([LicensedMac].self, from: $0) } ?? []
         firstLaunch = store.object(forKey: "license.firstLaunch") as? Date ?? Date()
         thisMac = LicensedMac(id: id, name: Host.current().localizedName ?? "This Mac", model: Self.modelIdentifier(), activated: Date())
         store.set(id, forKey: "license.deviceID")
-        store.set(hardware, forKey: "license.deviceHardware")
+        if let hardware { store.set(hardware, forKey: "license.deviceHardware") }
         save()
     }
 
@@ -108,11 +110,13 @@ final class License {
             MainActor.assumeIsolated { License.shared.tick() }
         }
         tick()
-        refresh()
     }
 
     private func tick() {
         now = Date()
+        // At launch, then once a day: a Mac that runs for weeks still tells the server it's in use,
+        // which lets any Mac on the key remove one it hasn't heard from in 30 days.
+        if now.timeIntervalSince(lastSync) >= 24 * 3600 { refresh() }
         // Expired trials keep working, with a gentle reminder every few hours.
         guard status == .expired, now.timeIntervalSince(lastReminder) > 3 * 3600 else { return }
         lastReminder = now
@@ -139,28 +143,30 @@ final class License {
             return
         }
         message = nil
-        // Activating again takes back a deactivation of this Mac that hasn't reached the server.
-        drop(Pending(key: candidate, id: thisMac.id))
         Task { await register(candidate) }
     }
 
-    /// Activation, and the sync of a Mac the server doesn't know yet.
+    /// Activation, and the sync of a Mac the server doesn't have yet.
     private func register(_ candidate: String) async {
         let device = ["id": thisMac.id, "name": thisMac.name, "model": thisMac.model]
         guard let reply = await ask("activate", ["key": candidate, "device": device]) else { return }
         let current = key == candidate
         switch reply {
         case .devices(let list):
+            // Only once the server says yes: this takes back a deactivation of this Mac still on its way.
+            pending.removeAll { $0 == Pending(key: candidate, id: thisMac.id) }
             key = candidate
             devices = list
             registered = true
             draft = ""
             message = nil
             save()
-        case .refused(let error):
+        case .refused(let error), .full(let error):
+            // No such key, or a full one without this Mac (the server always lists a Mac it has):
+            // this Mac isn't on that licence, even holding its key (preferences from another Mac).
             if current { revoke(error) } else { message = error }
-        case .full(let error):
-            message = error  // this Mac keeps whatever it had
+        case .order(let error):
+            message = error
         case .failed:
             // A sync that doesn't get through says so under the device list instead.
             if !current { message = Self.unreachable }
@@ -177,12 +183,13 @@ final class License {
         save()
     }
 
-    /// Syncs with the server: at launch, and every time the License tab is shown. Pending
-    /// deactivations go first; then a Mac the server doesn't know registers, and a registered one
-    /// takes the server's list. Only a definite answer changes anything.
+    /// Syncs with the server: at launch, once a day, and every time the License tab is shown.
+    /// Pending deactivations go first; then a Mac the server doesn't have registers, and a
+    /// registered one takes the server's list. Only a verdict changes anything.
     func refresh() {
         guard !previewing, !syncing else { return }
         syncing = true
+        lastSync = Date()
         Task {
             defer { syncing = false }
             await settlePending()
@@ -196,7 +203,7 @@ final class License {
                 save()
             case .refused(let error):
                 revoke(error)
-            case .full, .failed:
+            case .full, .order, .failed:
                 break
             }
         }
@@ -204,7 +211,7 @@ final class License {
 
     /// This Mac goes at once, offline too, so nobody is stuck licensed; the server hears of it now,
     /// or at a later sync. Another Mac (`id` is the server's handle for it) needs the server, which
-    /// lets a Mac remove only itself or a Mac activated after it.
+    /// lets a Mac remove itself, a Mac activated after it, or one not seen for 30 days.
     func deactivate(_ id: String) {
         guard let key else { return }
         if id == thisMac.id {
@@ -226,10 +233,11 @@ final class License {
                 message = nil
                 save()
             case .refused(let error):
-                // A Mac activated before this one, or this Mac is off the key: the sync tells which.
+                revoke(error)  // this Mac is off the key itself
+            case .order(let error), .full(let error):
                 message = error
-                refresh()
-            case .full, .failed:
+                refresh()  // the server has heard from that Mac lately: the list shows when
+            case .failed:
                 message = Self.unreachable
             }
         }
@@ -242,7 +250,7 @@ final class License {
             let body = Self.json(["key": item.key, "deviceId": item.id, "target": item.id])
             switch await Self.post(Self.api.appendingPathComponent("deactivate"), body) {
             case .devices, .refused: drop(item)
-            case .full, .failed: break
+            case .full, .order, .failed: break
             }
         }
     }
@@ -297,31 +305,36 @@ final class License {
     enum Reply: Equatable {
         /// 2xx with the key's Macs: this one under its own id, the others under the server's handles.
         case devices([LicensedMac])
-        /// 403 (this Mac isn't on the key) or 404 (no such key), with the server's sentence.
+        /// not_on_key (403) or unknown_key (404), with the server's sentence: no licence for this Mac.
         case refused(String)
-        /// 409: the key is on three Macs already.
+        /// limit (409): the key is on three other Macs already.
         case full(String)
+        /// order (403): the Mac to remove was activated before this one, and is still in use.
+        case order(String)
         /// Anything else, with the HTTP status if there was one: never a verdict.
         case failed(Int?)
     }
 
-    /// The server's {devices} or {error}; its dates are ISO 8601 without fractional seconds.
+    /// The server's {devices} or {error, code}; its dates are ISO 8601 without fractional seconds.
     private struct Answer: Decodable {
         var devices: [LicensedMac]?
         var error: String?
+        var code: String?
     }
 
-    /// Only the server's own JSON counts: a 2xx with its {devices}, or a 403, 404 or 409 with its
-    /// {error}. A 2xx that doesn't decode, a Vercel checkpoint page, a throttle (503 or 429) or
-    /// any other status is `.failed`, whatever its body says.
+    /// Only the server's own JSON counts: a 2xx with its {devices}, or an {error} with the code that
+    /// goes with its status. A 2xx that doesn't decode, a 403 or 404 without its code (an unknown
+    /// route, a Vercel checkpoint page, a proxy), a throttle (503 or 429) or any other status is
+    /// `.failed`, whatever its body says.
     nonisolated static func classify(status: Int?, body: Data) -> Reply {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let answer = try? decoder.decode(Answer.self, from: body)
-        switch (status ?? 0, answer?.devices, answer?.error) {
-        case (200..<300, let devices?, _): return .devices(devices)
-        case (403, _, let error?), (404, _, let error?): return .refused(error)
-        case (409, _, let error?): return .full(error)
+        switch (status ?? 0, answer?.devices, answer?.code, answer?.error) {
+        case (200..<300, let devices?, _, _): return .devices(devices)
+        case (403, _, "not_on_key"?, let error?), (404, _, "unknown_key"?, let error?): return .refused(error)
+        case (409, _, "limit"?, let error?): return .full(error)
+        case (403, _, "order"?, let error?): return .order(error)
         default: return .failed(status)
         }
     }
@@ -337,6 +350,7 @@ final class License {
         case .devices: "ok"
         case .refused: "refused"
         case .full: "full"
+        case .order: "order"
         case .failed(let status): status.map { "offline-\($0)" } ?? "offline"
         }
         return reply
@@ -357,21 +371,19 @@ final class License {
 
     // MARK: - This Mac's id
 
-    /// Which id this Mac goes by on the licence server: its hardware's, unless a stored id was made
-    /// on this same hardware. Preferences copied from another Mac (Migration Assistant, a restored
-    /// backup) bring that Mac's id and hardware hash, which don't match, so they give way. A stored id
-    /// with no hardware hash predates them and was this Mac's: it comes back as `retired`, for the
-    /// server to drop. No hardware id at all (never on a real Mac): the stored id stays, or a random
-    /// one stands in.
-    nonisolated static func deviceID(stored: String?, storedHardware: String?, hardware: String?) -> (id: String, retired: String?) {
-        guard let hardware else { return (stored ?? UUID().uuidString, nil) }
-        guard let stored, stored != hardware else { return (hardware, nil) }
-        if storedHardware == hardware { return (stored, nil) }
-        return (hardware, storedHardware == nil ? stored : nil)
+    /// Which id this install goes by on the licence server: a random one, made once and kept beside
+    /// a hash of the hardware it was made on, which is only ever compared here. Preferences copied to
+    /// another Mac (Migration Assistant, a restored backup) bring an id the first Mac still goes by:
+    /// on other hardware this install makes its own and leaves that one alone. An id stored before
+    /// the hash (none stored) stays and gets this Mac's; with no hardware id (never on a real Mac),
+    /// the stored id stays.
+    nonisolated static func deviceID(stored: String?, storedHardware: String?, hardware: String?) -> String {
+        if let stored, storedHardware == nil || hardware == nil || storedHardware == hardware { return stored }
+        return UUID().uuidString
     }
 
     /// SHA-256 of an IOPlatformUUID with this app's salt: the same in every account on the Mac, and
-    /// unlike the UUID itself, no use to any other app.
+    /// unlike the UUID itself, no use to any other app. It never leaves the Mac.
     nonisolated static func hardwareHash(_ platformUUID: String) -> String {
         SHA256.hash(data: Data("app.isola.mac/license-device:\(platformUUID)".utf8)).map { String(format: "%02x", $0) }.joined()
     }
@@ -432,18 +444,28 @@ final class License {
         precondition(isValid("ISOLA-U9VJ-DMME-DWJU"), "a key minted by the licence server validates")
         precondition(mask("ISOLA-W7UD-A389-NXLG") == "ISOLA-****-****-NXLG" && mask(nil) == "none", "isolactl never shows a whole key")
 
-        // Only the server's own JSON is a verdict; anything else keeps the licence as it is.
+        // Only the server's verdicts, told by their code, change the licence; anything else keeps it as it is.
         let reply = { (status: Int?, body: String) in classify(status: status, body: Data(body.utf8)) }
-        let list = #"{"devices":[{"id":"A","name":"Studio","model":"Mac14,13","activated":"2026-10-21T09:41:00Z"},{"id":"kQ3vX9_bR2mT7wYc1LpZ0a","name":"Air","model":"Mac15,12","activated":"2026-10-21T10:00:00Z"}]}"#
-        guard case .devices(let macs) = reply(200, list), macs.map(\.name) == ["Studio", "Air"] else {
-            preconditionFailure("a 2xx with {devices} is the list")
+        let list = #"{"devices":[{"id":"A","name":"Studio","model":"Mac14,13","activated":"2026-10-21T09:41:00Z","lastSeen":"2026-10-22T08:00:00Z"},{"id":"kQ3vX9_bR2mT7wYc1LpZ0a","name":"Air","model":"Mac15,12","activated":"2026-10-21T10:00:00Z"}]}"#
+        guard case .devices(let macs) = reply(200, list), macs.map(\.name) == ["Studio", "Air"],
+              macs.map(\.lastSeen) == [ISO8601DateFormatter().date(from: "2026-10-22T08:00:00Z"), nil] else {
+            preconditionFailure("a 2xx with {devices} is the list, last seen when the server says")
         }
-        let notOnKey = #"{"error":"This Mac isn’t activated with that license."}"#
+        let notOnKey = #"{"error":"This Mac isn’t activated with that license.","code":"not_on_key"}"#
         let checkpoint = "<!DOCTYPE html><html><head><title>Vercel Security Checkpoint</title></head><body></body></html>"
-        precondition(reply(403, notOnKey) == .refused("This Mac isn’t activated with that license."), "403 with the server's {error}: off the key")
-        precondition(reply(404, #"{"error":"That license key doesn’t exist."}"#) == .refused("That license key doesn’t exist."), "404: no such key")
-        precondition(reply(409, #"{"error":"This license is already active on 3 Macs. Deactivate one first."}"#)
-            == .full("This license is already active on 3 Macs. Deactivate one first."), "409: the limit")
+        precondition(reply(403, notOnKey) == .refused("This Mac isn’t activated with that license."), "403 not_on_key: off the key")
+        precondition(reply(404, #"{"error":"That license key doesn’t exist.","code":"unknown_key"}"#) == .refused("That license key doesn’t exist."),
+                     "404 unknown_key: no such key")
+        precondition(reply(409, #"{"error":"This license is already active on 3 Macs. Deactivate one first.","code":"limit"}"#)
+            == .full("This license is already active on 3 Macs. Deactivate one first."), "409 limit")
+        precondition(reply(403, #"{"error":"Not that one.","code":"order"}"#) == .order("Not that one."), "403 order: that removal, not this Mac")
+        precondition(reply(404, #"{"error":"Not found."}"#) == .failed(404), "an unknown route's 404 is no verdict")
+        precondition(reply(403, #"{"error":"This Mac isn’t activated with that license."}"#) == .failed(403)
+            && reply(409, #"{"error":"Full."}"#) == .failed(409), "nor is an error without its code")
+        precondition(reply(404, notOnKey) == .failed(404) && reply(403, #"{"error":"x","code":"unknown_key"}"#) == .failed(403)
+            && reply(403, #"{"error":"x","code":"limit"}"#) == .failed(403), "nor a code under another status")
+        precondition(reply(403, #"{"error":"x","code":"nope"}"#) == .failed(403) && reply(403, #"{"code":"not_on_key"}"#) == .failed(403),
+                     "nor an unknown code, or a code without its sentence")
         precondition(reply(200, checkpoint) == .failed(200) && reply(200, "{}") == .failed(200) && reply(201, "") == .failed(201),
                      "a 2xx without the list is an error, not a success")
         precondition(reply(403, checkpoint) == .failed(403) && reply(429, checkpoint) == .failed(429), "a checkpoint page is no verdict")
@@ -454,23 +476,59 @@ final class License {
         }
         precondition(reply(nil, "") == .failed(nil), "no answer at all")
 
-        // This Mac's id: the hardware's, unless a stored one was made on the same hardware.
+        // Any Mac may remove one the server hasn't heard from in 30 days; an older server's list goes by activation.
+        let day: TimeInterval = 24 * 3600, t = Date()
+        let mac = { (activated: TimeInterval, seen: TimeInterval?) in
+            LicensedMac(id: "x", name: "Mini", model: "Macmini9,1", activated: t.addingTimeInterval(-activated * day), lastSeen: seen.map { t.addingTimeInterval(-$0 * day) })
+        }
+        precondition(!mac(90, 29).stale(at: t) && mac(90, 31).stale(at: t), "stale after 30 days unseen")
+        precondition(mac(31, nil).stale(at: t) && !mac(29, nil).stale(at: t), "no lastSeen: the activation date stands in")
+
+        // This Mac's id: random, and kept on the hardware it was made on.
         let here = hardwareHash("6C1E6F5A-0D1B-4D9E-9C1A-2F4B8E7D3A10"), there = hardwareHash("0F7A2B44-91C3-4E6A-8B25-7D3E1C9A5F60")
         precondition(here.count == 64 && here != there && !here.contains("6C1E6F5A"), "a salted SHA-256, one per Mac")
         precondition(hardwareHash("00000000-0000-0000-0000-000000000000")
             == "10a2f3353f802bd66caf20f7a60c95285aac39553629ea6d46ec75977bf3fcb6", "SHA-256 of app.isola.mac/license-device:<IOPlatformUUID>")
-        func id(_ stored: String?, _ storedHardware: String?, _ hardware: String?) -> (String, String?) {
-            let result = deviceID(stored: stored, storedHardware: storedHardware, hardware: hardware)
-            return (result.id, result.retired)
-        }
-        precondition(id(nil, nil, here) == (here, nil), "a new install takes the hardware's id")
-        precondition(id(here, here, here) == (here, nil), "and keeps it")
-        precondition(id("kept-id", here, here) == ("kept-id", nil), "a stored id made on this hardware stays")
-        precondition(id(there, there, here) == (here, nil), "another Mac's id, copied over, gives way and is left alone")
-        precondition(id("4F6C3B9E-UUID", nil, here) == (here, "4F6C3B9E-UUID"), "an id from before is retired for the server to drop")
-        precondition(id("4F6C3B9E-UUID", nil, nil) == ("4F6C3B9E-UUID", nil), "no hardware id: the stored one stays")
-        precondition(id(nil, nil, nil).0.count == 36, "or a random one stands in")
+        let made = deviceID(stored: nil, storedHardware: nil, hardware: here)
+        precondition(UUID(uuidString: made) != nil && made != deviceID(stored: nil, storedHardware: nil, hardware: here), "a new install makes a random id")
+        precondition(deviceID(stored: made, storedHardware: here, hardware: here) == made, "and keeps it")
+        precondition(deviceID(stored: "4F6C3B9E-UUID", storedHardware: nil, hardware: here) == "4F6C3B9E-UUID", "an id from before the hash stays")
+        let copy = deviceID(stored: made, storedHardware: there, hardware: here)
+        precondition(UUID(uuidString: copy) != nil && copy != made, "copied from another Mac: an id of its own, the other Mac's left alone")
+        precondition(deviceID(stored: made, storedHardware: there, hardware: nil) == made, "no hardware id: the stored one stays")
+        precondition(UUID(uuidString: deviceID(stored: nil, storedHardware: nil, hardware: nil)) != nil, "or a random one stands in")
         precondition(hardwareID().map { $0.count == 64 } ?? true, "this Mac's own")
+        selfCheckCopiedPreferences()
+    }
+
+    /// Preferences from before the hardware hash, and preferences that came from another Mac, in a
+    /// scratch defaults file (a path as the suite name keeps it out of ~/Library/Preferences).
+    private static func selfCheckCopiedPreferences() {
+        guard let hardware = hardwareID() else { return }
+        let suite = FileManager.default.temporaryDirectory.appendingPathComponent("isola-license-selfcheck-\(UUID().uuidString)").path
+        guard let store = UserDefaults(suiteName: suite) else { return }
+        defer {
+            store.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        let key = makeKey(seed: 7)
+        store.set(key, forKey: "license.key")
+        store.set("4F6C3B9E-UUID", forKey: "license.deviceID")
+        store.set(true, forKey: "license.registered")
+        let legacy = License(store: store)
+        precondition(legacy.thisMac.id == "4F6C3B9E-UUID" && legacy.registered && legacy.pendingDeactivations == 0,
+                     "an id from before the hash: kept and still registered, nothing queued to retire it")
+        precondition(store.string(forKey: "license.deviceHardware") == hardware, "and stamped with this Mac's hash")
+
+        // The same preferences on another Mac, with a deactivation of the first Mac still queued.
+        store.set(hardwareHash("0F7A2B44-91C3-4E6A-8B25-7D3E1C9A5F60"), forKey: "license.deviceHardware")
+        store.set(try? JSONEncoder().encode([Pending(key: key, id: "4F6C3B9E-UUID")]), forKey: "license.pending")
+        let copied = License(store: store)
+        precondition(copied.thisMac.id != "4F6C3B9E-UUID" && UUID(uuidString: copied.thisMac.id) != nil, "copied from another Mac: a random id of its own")
+        precondition(!copied.registered && copied.pendingDeactivations == 0 && copied.key == key,
+                     "which registers before it counts, and leaves the other Mac's id and queue alone")
+        precondition(store.string(forKey: "license.deviceID") == copied.thisMac.id && store.string(forKey: "license.deviceHardware") == hardware,
+                     "this Mac's from now on")
     }
 
     private static func modelIdentifier() -> String {
@@ -595,10 +653,10 @@ struct LicensePage: View {
             switch license.status {
             case .licensed:
                 Section {
-                    // In activation order: a Mac can remove itself or a Mac activated after it.
+                    // In activation order: a Mac can remove itself, a Mac activated after it, or one not seen for 30 days.
                     let mine = license.devices.firstIndex { $0.id == license.thisMac.id }
                     ForEach(Array(license.devices.enumerated()), id: \.element.id) { index, mac in
-                        deviceRow(mac, removable: mine.map { index >= $0 } ?? true)
+                        deviceRow(mac, removable: (mine.map { index >= $0 } ?? true) || mac.stale(at: license.now))
                     }
                 } header: {
                     Text("Activated Macs (\(license.devices.count) of \(License.deviceLimit))")
@@ -607,7 +665,7 @@ struct LicensePage: View {
                         if let message = license.message {
                             Label(message, systemImage: "exclamationmark.circle.fill").foregroundStyle(.red)
                         }
-                        Text("Deactivate a Mac to free a slot for another one. A Mac can remove itself or any Mac activated after it."
+                        Text("Deactivate a Mac to free a slot for another one. A Mac can remove itself, any Mac activated after it, and any Mac not seen for 30 days."
                             + (license.serverStatus.hasPrefix("offline") ? " Couldn’t reach the license server, so this list may be out of date." : ""))
                     }
                     .multilineTextAlignment(.leading)
@@ -719,14 +777,16 @@ struct LicensePage: View {
                             .background(Capsule().fill(Color.accentColor.opacity(0.2)))
                     }
                 }
-                Text("\(mac.model) · since \(mac.activated.formatted(date: .abbreviated, time: .omitted))")
+                Text(mac.stale(at: license.now)
+                    ? "\(mac.model) · last seen \((mac.lastSeen ?? mac.activated).formatted(.relative(presentation: .named)))"
+                    : "\(mac.model) · since \(mac.activated.formatted(date: .abbreviated, time: .omitted))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Button("Deactivate") { license.deactivate(mac.id) }
                 .disabled(!removable)
-                .help(removable ? "" : "Activated before this Mac: only that Mac, or one activated before it, can remove it.")
+                .help(removable ? "" : "Activated before this Mac and seen in the last 30 days: only that Mac, or one activated before it, can remove it.")
         }
     }
 

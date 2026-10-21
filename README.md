@@ -43,7 +43,7 @@ build/Isola.app/Contents/MacOS/Isola --gallery /tmp/isola-gallery   # offscreen 
 
 Any process on the Mac can post to `isolactl`'s channel, so a release build (what `scripts/build.sh` makes) only listens when asked: `defaults write app.isola.mac debug.channel -bool true` (or launch it with `ISOLA_DEBUG=1`), then relaunch Isola; `defaults delete app.isola.mac debug.channel` turns it off. Debug builds always listen. `license.state` shows only the key's last group.
 
-The app's licence id is a salted SHA-256 of the Mac's IOPlatformUUID, so preferences copied to another Mac (Migration Assistant) don't bring it along. Only a definite answer from the licence server (403, 404, or 409 at activation) changes the licence; an outage, a throttle or a checkpoint page keeps it. Deactivating this Mac works offline and reaches the server at a later launch or License tab visit.
+The app's licence id is random, made once per install and stored next to a salted SHA-256 of the Mac's IOPlatformUUID that never leaves the Mac. Preferences copied to another Mac (Migration Assistant) arrive with the other hardware's hash, so the copy makes an id of its own and has to register (on a full key it isn't licensed) while the original keeps its id. Only the server's verdicts, told by their code, change the licence; an outage, a throttle, an unknown route or a checkpoint page keeps it. The app syncs at launch, once a day and whenever the License tab is shown; deactivating this Mac works offline and reaches the server at a later sync.
 
 `public/downloads/Isola.dmg` is this build. It is signed ad hoc, not notarized: the first launch needs System Settings → Privacy & Security → Open Anyway (the DMG includes a note).
 

@@ -233,16 +233,20 @@ enum SettingsGallery {
         window("settings-license-trial", section: "license")
         license.preview(key: nil, devices: [], firstLaunch: Date().addingTimeInterval(-80 * hour), message: "That doesn’t look like an Isola license key.")
         window("settings-license-expired", section: "license")
-        // In activation order, other Macs under the server's handles: Studio came first, so this Mac
-        // can't remove it; the Air came after.
-        let studio = LicensedMac(id: "kQ3vX9_bR2mT7wYc1LpZ0a", name: "Studio", model: "Mac14,13", activated: Date().addingTimeInterval(-40 * 24 * hour))
+        // In activation order, other Macs under the server's handles: Studio came first and is in use,
+        // so this Mac can't remove it; the mini came first too but hasn't been seen for 30 days, and
+        // the Air came after.
+        let studio = LicensedMac(id: "kQ3vX9_bR2mT7wYc1LpZ0a", name: "Studio", model: "Mac14,13", activated: Date().addingTimeInterval(-40 * 24 * hour),
+                                 lastSeen: Date().addingTimeInterval(-5 * hour))
+        let mini = LicensedMac(id: "Hd4sT9pQ1wE6rY2uI8oP5a", name: "Mac mini", model: "Macmini9,1", activated: Date().addingTimeInterval(-200 * 24 * hour),
+                               lastSeen: Date().addingTimeInterval(-62 * 24 * hour))
         var me = license.thisMac
         me.activated = Date().addingTimeInterval(-3 * 24 * hour)
         let air = LicensedMac(id: "Zp8LqW2nV5xR0tYb7MkC3d", name: "Air", model: "MacBookAir10,1", activated: Date().addingTimeInterval(-1 * 24 * hour))
-        license.preview(key: License.makeKey(seed: 7), devices: [studio, me, air], firstLaunch: Date().addingTimeInterval(-300 * hour))
+        license.preview(key: License.makeKey(seed: 7), devices: [studio, mini, me], firstLaunch: Date().addingTimeInterval(-300 * hour))
         Updates.shared.preview(Updates.sample, checked: Date().addingTimeInterval(-2 * hour))
         window("settings-license-licensed", section: "license")
-        license.preview(key: License.makeKey(seed: 7), devices: [studio, me], firstLaunch: Date().addingTimeInterval(-300 * hour),
+        license.preview(key: License.makeKey(seed: 7), devices: [studio, me, air], firstLaunch: Date().addingTimeInterval(-300 * hour),
                         message: License.unreachable, serverStatus: "offline")
         window("settings-license-offline", section: "license")
 
