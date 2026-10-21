@@ -49,8 +49,8 @@ final class Preferences {
     var naturalSwipe: Bool = load("naturalSwipe", false) { didSet { store.set(naturalSwipe, forKey: "naturalSwipe") } }
     var speed: AnimationSpeed = loadEnum("speed", .smooth) { didSet { store.set(speed.rawValue, forKey: "speed") } }
     var overshoot: Bool = load("overshoot", true) { didSet { store.set(overshoot, forKey: "overshoot") } }
-    var unlockSound: Bool = load("unlockSound", true) { didSet { store.set(unlockSound, forKey: "unlockSound") } }
-    var lockSound: Bool = load("lockSound", false) { didSet { store.set(lockSound, forKey: "lockSound") } }
+    var unlockSound: Bool = load("unlockSound", true) { didSet { store.set(unlockSound, forKey: "unlockSound"); if unlockSound { Sounds.unlock() } } }
+    var lockSound: Bool = load("lockSound", false) { didSet { store.set(lockSound, forKey: "lockSound"); if lockSound { Sounds.lock() } } }
 
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }

@@ -13,7 +13,14 @@ final class FocusMonitor {
         var name: String
         var symbol: String
         var tint: NSColor
+        /// The name in the user's language (Apple's names for the built-in modes).
+        var title: String { FocusL10n.text(name) }
     }
+
+    /// On/off from INFocusStatusCenter alone: which Focus is unknown.
+    nonisolated static let genericID = "focus"
+    /// System Settings › Focus (also where sharing Focus status is managed).
+    nonisolated static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.Focus-Settings.extension")!
 
     private(set) var current: Mode?
     private var timer: Timer?
@@ -34,23 +41,21 @@ final class FocusMonitor {
         }
     }
 
-    /// Ask for Focus status access (onboarding calls this; start() never prompts).
-    static func requestAccess() {
-        INFocusStatusCenter.default.requestAuthorization { _ in }
-    }
-
     func apply(_ mode: Mode?, announce: Bool) {
         let previous = current
         current = mode
         let state = FocusState.shared
         state.active = mode != nil
         if let mode {
-            state.name = mode.name
+            state.name = mode.title
             state.symbol = mode.symbol
             state.tint = mode.tint
         }
         if announce, SystemPreferences.shared.focusNotification, let shown = mode ?? previous {
             Island.shared.post(FocusItems.changed(shown, on: mode != nil))
+        }
+        if announce, mode?.id == Self.sleepID, previous?.id != Self.sleepID, SystemPreferences.shared.sleepFocusSound {
+            Sounds.sleepFocus()
         }
         syncActivity()
     }
@@ -67,16 +72,24 @@ final class FocusMonitor {
         if let fromDatabase = readDatabase() { return fromDatabase }
         let center = INFocusStatusCenter.default
         guard center.authorizationStatus == .authorized, center.focusStatus.isFocused == true else { return nil }
-        return Mode(id: "focus", name: "Focus", symbol: "moon.fill", tint: .systemIndigo)
+        return Mode(id: genericID, name: "Focus", symbol: "moon.fill", tint: .systemIndigo)
+    }
+
+    nonisolated static let database = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/DoNotDisturb/DB")
+
+    /// Full Disk Access, as far as Focus is concerned (status checks never prompt).
+    nonisolated static var canReadDatabase: Bool {
+        (try? FileManager.default.contentsOfDirectory(atPath: database.path)) != nil
     }
 
     /// `.some(nil)` = database readable and no Focus on; `nil` = can't read it.
     nonisolated static func readDatabase() -> Mode?? {
-        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/DoNotDisturb/DB")
+        let dir = database
         guard let data = try? Data(contentsOf: dir.appendingPathComponent("Assertions.json")),
               let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
         guard let id = firstValue("assertionDetailsModeIdentifier", in: json) as? String else { return .some(nil) }
         var mode = known[id] ?? Mode(id: id, name: "Focus", symbol: "moon.fill", tint: .systemIndigo)
+        mode.id = id
         if let config = try? Data(contentsOf: dir.appendingPathComponent("ModeConfigurations.json")),
            let configJSON = try? JSONSerialization.jsonObject(with: config),
            let m = modeDictionary(id, in: configJSON) {
@@ -87,10 +100,12 @@ final class FocusMonitor {
         return .some(mode)
     }
 
+    nonisolated static let sleepID = "com.apple.sleep.sleep-mode"
+
     nonisolated static let known: [String: Mode] = [
         "com.apple.donotdisturb.mode.default": Mode(id: "", name: "Do Not Disturb", symbol: "moon.fill", tint: .systemIndigo),
         "com.apple.focus.work": Mode(id: "", name: "Work", symbol: "briefcase.fill", tint: .systemTeal),
-        "com.apple.sleep.sleep-mode": Mode(id: "", name: "Sleep", symbol: "bed.double.fill", tint: .systemMint),
+        sleepID: Mode(id: "", name: "Sleep", symbol: "bed.double.fill", tint: .systemMint),
         "com.apple.focus.personal-time": Mode(id: "", name: "Personal", symbol: "person.fill", tint: .systemPurple),
         "com.apple.donotdisturb.mode.driving": Mode(id: "", name: "Driving", symbol: "car.fill", tint: .systemOrange),
         "com.apple.focus.fitness": Mode(id: "", name: "Fitness", symbol: "figure.run", tint: .systemGreen),
@@ -146,9 +161,9 @@ enum FocusItems {
             }
             .padding(.leading, 12)
         } trailing: {
-            WingText(on ? "On" : "Off", color: on ? tint : Palette.muted)
+            WingText(FocusL10n.text(on ? "On" : "Off"), color: on ? tint : Palette.muted)
         }
-        .peek(always: true) { PeekLabel(mode.name) }
+        .peek(always: true) { PeekLabel(mode.title) }
     }
 
     static func activity(_ mode: FocusMonitor.Mode) -> IslandItem {
@@ -158,6 +173,47 @@ enum FocusItems {
         } trailing: {
             Circle().fill(tint).frame(width: 7, height: 7).padding(.trailing, 15)
         }
-        .peek(onHover: true) { PeekLabel("\(mode.name) Focus") }
+        .peek(onHover: true) {
+            // Long forms ("Mode de concentration Travail" on a pill) give way to the bare name.
+            ViewThatFits(in: .horizontal) {
+                if mode.id != FocusMonitor.genericID { PeekLabel(String(format: FocusL10n.text("%@ Focus"), mode.title)) }
+                PeekLabel(mode.title)
+            }
+        }
+        .onOptionTap { NSWorkspace.shared.open(FocusMonitor.settingsURL) }
     }
+}
+
+/// Start of localization: Focus strings in Italian, German, French and Spanish, worded as
+/// in macOS's own tables (DoNotDisturb, FocusSettingsUI and Control Center's Focus module).
+/// The app bundle has no .lproj folders (scripts/build.sh), so the table lives here,
+/// keyed by the English text; anything missing stays English.
+enum FocusL10n {
+    static let language = language(for: Locale.preferredLanguages)
+
+    /// The first preferred language Isola has strings for, with the system's own fallbacks.
+    static func language(for preferences: [String]) -> String {
+        Bundle.preferredLocalizations(from: ["en", "it", "de", "fr", "es"], forPreferences: preferences).first ?? "en"
+    }
+
+    static func text(_ english: String, language: String = FocusL10n.language) -> String {
+        table[english]?[language] ?? english
+    }
+
+    private static let table: [String: [String: String]] = [
+        "Focus": ["it": "Full immersion", "de": "Fokus", "fr": "Concentration", "es": "Concentración"],
+        "%@ Focus": ["it": "Full immersion - %@", "de": "Fokus „%@“", "fr": "Mode de concentration %@", "es": "Modo “%@”"],
+        // Control Center's short On/Off (its Spanish is Activado, too wide for the wing: Focus settings' Sí/No).
+        "On": ["it": "Sì", "de": "Ein", "fr": "Oui", "es": "Sí"],
+        "Off": ["it": "No", "de": "Aus", "fr": "Non", "es": "No"],
+        "Do Not Disturb": ["it": "Non disturbare", "de": "Nicht stören", "fr": "Ne pas déranger", "es": "No molestar"],
+        "Work": ["it": "Lavoro", "de": "Arbeiten", "fr": "Travail", "es": "Trabajo"],
+        "Sleep": ["it": "Sonno", "de": "Schlafen", "fr": "Repos", "es": "Descanso"],
+        "Personal": ["it": "Personale", "de": "Zeit für mich", "fr": "Temps pour soi", "es": "Tiempo libre"],
+        "Driving": ["it": "Guida", "de": "Fahren", "fr": "Conduite", "es": "Conducción"],
+        "Fitness": ["it": "Fitness", "de": "Fitness", "fr": "Sport", "es": "Ejercicio"],
+        "Reading": ["it": "Lettura", "de": "Lesen", "fr": "Lecture", "es": "Lectura"],
+        "Gaming": ["it": "Videogiochi", "de": "Spielen", "fr": "Jeu vidéo", "es": "Juego"],
+        "Mindfulness": ["it": "Mindfulness", "de": "Achtsamkeit", "fr": "Pleine conscience", "es": "Mindfulness"],
+    ]
 }

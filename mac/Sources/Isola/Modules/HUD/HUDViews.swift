@@ -6,8 +6,16 @@ struct HUDPart: View {
     let part: Part
     let s: HUDSnapshot
     let look: HUDLook
+    /// Rubber band past 0% / 100% (`HUDModel.stretch`).
+    var stretch: Double = 0
 
     private var silent: Bool { s.kind == .volume && (s.muted || s.level <= 0) }
+
+    /// Stretched toward the push (right at the top, left at the bottom) and a little thinner;
+    /// `amount` is the share of its width a bar gains at full stretch (more for the short one).
+    private func rubberBand(_ bar: some View, amount: CGFloat) -> some View {
+        bar.scaleEffect(x: 1 + amount * stretch, y: 1 - 0.3 * stretch, anchor: s.level >= 0.5 ? .leading : .trailing)
+    }
 
     var body: some View {
         switch part {
@@ -52,7 +60,7 @@ struct HUDPart: View {
     }
 
     @ViewBuilder private var value: some View {
-        let bar = LevelBar(value: s.level, tint: silent ? Palette.muted : Palette.ink, height: 5).frame(width: 26).opacity(silent ? 0.45 : 1)
+        let bar = rubberBand(LevelBar(value: s.level, tint: silent ? Palette.muted : Palette.ink, height: 5).frame(width: 26), amount: 0.25).opacity(silent ? 0.45 : 1)
         if silent, look.style != .bar {
             valueText("Mute")
         } else if look.style == .decibels, s.kind == .volume {
@@ -73,7 +81,7 @@ struct HUDPart: View {
                 .lineLimit(1)
                 .frame(maxWidth: 74, alignment: .leading)
                 .fixedSize(horizontal: true, vertical: false)
-            LevelBar(value: s.level, tint: silent ? Palette.muted : Palette.ink, height: 5)
+            rubberBand(LevelBar(value: s.level, tint: silent ? Palette.muted : Palette.ink, height: 5), amount: 0.07)
                 .opacity(silent ? 0.45 : 1)
         }
         .padding(.horizontal, 14)
@@ -86,7 +94,7 @@ struct HUDPart: View {
 struct LiveHUD: View {
     let part: HUDPart.Part
     var body: some View {
-        HUDPart(part: part, s: HUDModel.shared.snapshot, look: HUDPreferences.shared.look)
+        HUDPart(part: part, s: HUDModel.shared.snapshot, look: HUDPreferences.shared.look, stretch: HUDModel.shared.stretch)
     }
 }
 
@@ -110,7 +118,22 @@ struct HUDSettingsView: View {
             } header: {
                 Text("System HUD")
             } footer: {
-                Text("When off, Isola still shows its HUD whenever the volume changes, next to the macOS one. Brightness needs the keys, so it only appears when this is on.")
+                note("When off, Isola still shows its HUD whenever the volume changes, next to the macOS one. Brightness needs the keys, so it only appears when this is on.")
+            }
+            Section {
+                Toggle("Show the HUD for changes made elsewhere", isOn: $hud.showExternalChanges)
+                    .disabled(!hud.replaceSystemHUD)
+            } header: {
+                Text("Sync")
+            } footer: {
+                note("Volume changed by other apps, Control Center or your AirPods. Turning this off needs the option above, so Isola can tell those changes from your key presses.")
+            }
+            Section {
+                Toggle("Brightness and volume from BetterDisplay", isOn: $hud.betterDisplay)
+            } header: {
+                Text("Other displays")
+            } footer: {
+                note("For monitors BetterDisplay controls. In BetterDisplay, turn on Settings › Application › Integration › Dispatch OSD notifications, and hide its own OSD in its Keyboard settings.")
             }
             Section("Appearance") {
                 Picker("Style", selection: $hud.style) {
@@ -134,12 +157,17 @@ struct HUDSettingsView: View {
             } header: {
                 Text("Motion")
             } footer: {
-                Text("Speed and overshoot apply to the whole island.")
+                note("Speed and overshoot apply to the whole island. With overshoot, the bar also stretches when you press past 0% or 100%.")
             }
             Section("Sound") {
                 Toggle("Play feedback when the volume is changed", isOn: $hud.feedbackSound)
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Section footer, left-aligned like the other settings pages.
+    private func note(_ text: String) -> some View {
+        Text(text).multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
     }
 }

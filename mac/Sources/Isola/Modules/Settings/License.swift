@@ -193,9 +193,112 @@ final class License {
     }
 }
 
+/// Once a day, the website's releases.json against this build: a newer release is
+/// announced in the island (tap to download) unless the prompt is silenced.
+@MainActor @Observable
+final class Updates {
+    static let shared = Updates()
+    static let feed = URL(string: "https://isola-ruby.vercel.app/releases.json")!
+
+    struct Release: Decodable {
+        var version: String
+        var build: Int?
+        var url: URL
+        var notes: String?
+    }
+
+    var silenced = UserDefaults.standard.bool(forKey: "updates.silenced") {
+        didSet { UserDefaults.standard.set(silenced, forKey: "updates.silenced") }
+    }
+    private(set) var available: Release?
+    private(set) var lastCheck = UserDefaults.standard.object(forKey: "updates.lastCheck") as? Date
+    private(set) var failed = false
+    @ObservationIgnored private var timer: Timer?
+
+    /// This build, e.g. ("1.4.7", 151); nil when running unbundled (gallery, swift run).
+    static var current: (version: String, build: Int?)? {
+        let info = Bundle.main.infoDictionary
+        guard let version = info?["CFBundleShortVersionString"] as? String else { return nil }
+        return (version, (info?["CFBundleVersion"] as? String).flatMap { Int($0) })
+    }
+
+    func start() {
+        guard Self.current != nil else { return }
+        checkIfDue()
+        timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
+            MainActor.assumeIsolated { Updates.shared.checkIfDue() }
+        }
+    }
+
+    /// Failed checks aren't recorded, so the hourly timer retries them.
+    private func checkIfDue() {
+        if Date().timeIntervalSince(lastCheck ?? .distantPast) >= 24 * 3600 { check() }
+    }
+
+    func check() {
+        URLSession.shared.dataTask(with: Self.feed) { data, response, _ in
+            let ok = (response as? HTTPURLResponse)?.statusCode == 200
+            let release = ok ? data.flatMap { try? JSONDecoder().decode(Release.self, from: $0) } : nil
+            DispatchQueue.main.async { MainActor.assumeIsolated { Updates.shared.received(release) } }
+        }.resume()
+    }
+
+    private func received(_ release: Release?) {
+        failed = release == nil
+        guard let release, let current = Self.current else { return }
+        lastCheck = Date()
+        UserDefaults.standard.set(lastCheck, forKey: "updates.lastCheck")
+        available = Self.isNewer(release.version, build: release.build, than: current.version, build: current.build) ? release : nil
+        if let available, !silenced { Island.shared.post(Self.prompt(available), duration: 8) }
+    }
+
+    /// Dotted versions compare numerically ("1.10" > "1.9", "1.4" == "1.4.0"); the same
+    /// version is newer only with a higher build.
+    nonisolated static func isNewer(_ version: String, build: Int?, than current: String, build currentBuild: Int?) -> Bool {
+        let a = version.split(separator: ".").map { Int($0) ?? 0 }, b = current.split(separator: ".").map { Int($0) ?? 0 }
+        let n = max(a.count, b.count)
+        let x = a + Array(repeating: 0, count: n - a.count), y = b + Array(repeating: 0, count: n - b.count)
+        if x != y { return y.lexicographicallyPrecedes(x) }
+        guard let build, let currentBuild else { return false }
+        return build > currentBuild
+    }
+
+    static func prompt(_ release: Release) -> IslandItem {
+        IslandItem(id: "updates.available", kind: .notification) {
+            Image(systemName: "arrow.down.circle.fill").islandSymbol(16).foregroundStyle(Palette.green).padding(.leading, 12)
+        } trailing: {
+            WingText(release.version, color: Palette.green)
+        }
+        .peek(always: true) { PeekLabel("Isola \(release.version) is available") }
+        .onTap {
+            NSWorkspace.shared.open(release.url)
+            Island.shared.dismissTransient()
+        }
+    }
+
+    /// For gallery snapshots only.
+    func preview(_ release: Release?, checked: Date?) {
+        available = release
+        lastCheck = checked
+    }
+
+    static let sample = Release(version: "1.5", build: 160, url: License.website.appendingPathComponent("download"), notes: "Lock Screen widgets and a faster island.")
+
+    static func gallery() {
+        precondition(isNewer("1.5", build: nil, than: "1.4.7", build: 151) && isNewer("1.4.10", build: nil, than: "1.4.9", build: nil), "newer version")
+        precondition(isNewer("1.4.7", build: 152, than: "1.4.7", build: 151) && !isNewer("1.4.7", build: 151, than: "1.4.7", build: 151), "same version, by build")
+        precondition(!isNewer("1.4", build: nil, than: "1.4.0", build: nil) && !isNewer("1.3.9", build: 999, than: "1.4", build: 1), "equal or older")
+        let json = #"{"version":"1.4.7","build":151,"url":"https://isola-ruby.vercel.app/download","notes":"..."}"#
+        precondition((try? JSONDecoder().decode(Release.self, from: Data(json.utf8)))?.build == 151, "releases.json shape")
+        Gallery.island("update-available-pill", item: prompt(sample))
+        Gallery.island("update-available-notch", item: prompt(sample), geometry: .notchPreview)
+    }
+}
+
 /// Settings › License.
 struct LicensePage: View {
     @Bindable var license = License.shared
+    @Bindable var updates = Updates.shared
 
     var body: some View {
         Form {
@@ -243,8 +346,41 @@ struct LicensePage: View {
                     }
                 }
             }
+            Section {
+                LabeledContent {
+                    if let release = updates.available {
+                        Link("Download", destination: release.url)
+                    } else {
+                        Button("Check Now") { updates.check() }
+                    }
+                } label: {
+                    Text(updateTitle)
+                    Text(updateDetail)
+                }
+                Toggle("Silence update prompt", isOn: $updates.silenced)
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text("Isola checks once a day and shows a new version in the island. Silenced, it only appears here.")
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .formStyle(.grouped)
+    }
+
+    private var updateTitle: String {
+        if let release = updates.available { return "Isola \(release.version) is available" }
+        if updates.failed { return "Couldn’t check for updates" }
+        return updates.lastCheck == nil ? "Not checked yet" : "Isola is up to date"
+    }
+
+    /// Release notes when there's an update, else this build and when it was last checked.
+    private var updateDetail: String {
+        if let notes = updates.available?.notes { return notes }
+        let build = Updates.current.map { "Version \($0.version)" + ($0.build.map { " (\($0))" } ?? "") } ?? "Development build"
+        guard let checked = updates.lastCheck else { return build }
+        return "\(build) · checked \(checked.formatted(.relative(presentation: .named)))"
     }
 
     @ViewBuilder private var status: some View {

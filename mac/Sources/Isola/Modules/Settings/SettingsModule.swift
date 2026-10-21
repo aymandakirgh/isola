@@ -6,17 +6,25 @@ import SwiftUI
 enum SettingsModule {
     static func start() {
         License.shared.start()
+        Updates.shared.start()
         StatusItem.shared.install()
         Debug.on("settings.open") { SettingsWindow.show(section: $0["section"]) }
         Debug.on("settings.close") { _ in SettingsWindow.close() }
         Debug.on("settings.onboarding") { _ in OnboardingWindow.show() }
         Debug.on("license.set") { License.shared.activate($0["key"] ?? "") }
         Debug.on("license.reset") { _ in License.shared.reset() }
+        Debug.on("update.check") { _ in Updates.shared.check() }
+        Debug.on("update.prompt") { a in
+            var release = Updates.sample
+            release.version = a["version"] ?? release.version
+            Island.shared.post(Updates.prompt(release), duration: 8)
+        }
         if !UserDefaults.standard.bool(forKey: "onboarded") { OnboardingWindow.show() }
     }
 
     static func gallery() {
         License.selfCheck()
+        Updates.gallery()
         SettingsGallery.render()
     }
 }
@@ -214,12 +222,13 @@ enum SettingsGallery {
         var me = license.thisMac
         me.activated = Date().addingTimeInterval(-3 * 24 * hour)
         license.preview(key: License.makeKey(seed: 7), devices: [me, studio], firstLaunch: Date().addingTimeInterval(-300 * hour))
+        Updates.shared.preview(Updates.sample, checked: Date().addingTimeInterval(-2 * hour))
         window("settings-license-licensed", section: "license")
 
         for step in OnboardingModel.Step.allCases {
             let model = OnboardingModel()
             model.step = step
-            model.statuses = [.accessibility: .granted, .calendar: .notDetermined, .bluetooth: .granted, .automation: .denied]
+            model.statuses = [.accessibility: .granted, .calendar: .notDetermined, .bluetooth: .granted, .automation: .denied, .focus: .notDetermined, .fullDiskAccess: .denied]
             if let dir = directory { capture(OnboardingWindow.makeWindow(model: model), name: "onboarding-\(step)", dir: dir) }
         }
 
