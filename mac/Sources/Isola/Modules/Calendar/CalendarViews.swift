@@ -207,7 +207,7 @@ struct WeatherSnapshot {
         temperature = w.displayTemperature
         symbol = w.symbol
         condition = w.condition
-        detail = w.precipitationChance.map { $0 >= 0.3 ? "Rain likely · \(Int(($0 * 100).rounded()))%" : "No rain expected" }
+        detail = w.precipitationDetail ?? w.precipitationChance.map { _ in "No rain expected" }
     }
 
     init(temperature: String, symbol: String, condition: String, detail: String?) {

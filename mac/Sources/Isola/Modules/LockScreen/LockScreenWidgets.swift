@@ -44,6 +44,8 @@ struct LockWeather {
     var temperature: String
     var condition: String
     var precipitation: Double?
+    /// "Rain at 18:00 · 60%" when rain is coming.
+    var rain: String?
 }
 
 struct LockFocus {
@@ -68,7 +70,9 @@ struct LockScreenData {
                 ? LockTrack(title: np.title, artist: np.artist, artwork: np.artwork, isPlaying: np.isPlaying, elapsed: np.currentElapsed(at: date), duration: np.duration)
                 : nil,
             focus: f.active ? LockFocus(name: f.name.isEmpty ? "Focus" : f.name, symbol: f.symbol) : nil,
-            weather: w.available ? LockWeather(symbol: w.symbol, temperature: w.displayTemperature, condition: w.condition, precipitation: w.precipitationChance) : nil,
+            weather: w.available
+                ? LockWeather(symbol: w.symbol, temperature: w.displayTemperature, condition: w.condition, precipitation: w.precipitationChance, rain: w.precipitationDetail)
+                : nil,
             battery: p.hasBattery ? LockBattery(level: p.level, charging: p.charging, timeToEmpty: p.timeToEmpty) : nil,
             devices: DevicesState.shared.devices,
             event: CalendarState.shared.next
@@ -86,7 +90,7 @@ struct LockScreenData {
     @MainActor static let sample = LockScreenData(
         track: LockTrack(title: "Ocean City", artist: "Pacific Coliseum", artwork: sampleArtwork, isPlaying: true, elapsed: 47, duration: 214),
         focus: LockFocus(name: "Work", symbol: "briefcase.fill"),
-        weather: LockWeather(symbol: "sun.max.fill", temperature: "24°", condition: "Sunny", precipitation: 0.1),
+        weather: LockWeather(symbol: "sun.max.fill", temperature: "24°", condition: "Sunny", precipitation: 0.4, rain: "Showers at 18:00 · 40%"),
         battery: LockBattery(level: 0.82, charging: false, timeToEmpty: 214),
         devices: [ConnectedDevice(id: "sample", name: "Earbuds Pro", symbol: "airpodspro", battery: 0.76, caseBattery: 0.9)],
         event: CalendarEvent(
@@ -403,8 +407,8 @@ struct LockInfoRow: View {
                     Text(weather.temperature)
                     if options.weatherStyle == .detailed {
                         Text(weather.condition).opacity(0.8)
-                        if let p = weather.precipitation {
-                            Label("\(Int((p * 100).rounded()))%", systemImage: "drop.fill").labelStyle(.titleAndIcon).opacity(0.8)
+                        if let rain = weather.rain ?? weather.precipitation.map({ "\(Int(($0 * 100).rounded()))%" }) {
+                            Label(rain, systemImage: "drop.fill").labelStyle(.titleAndIcon).opacity(0.8)
                         }
                     }
                 }

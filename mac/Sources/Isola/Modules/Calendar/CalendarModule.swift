@@ -118,6 +118,7 @@ enum CalendarModule {
             if let s = args["symbol"] { w.symbol = s }
             if let c = args["condition"] { w.condition = c }
             if let p = args["rain"].flatMap(Double.init) { w.precipitationChance = p }
+            if let d = args["detail"] { w.precipitationDetail = d.isEmpty ? nil : d }  // e.g. detail="Snow from 07:00 · 80%"
             w.available = true
         }
     }
@@ -130,6 +131,7 @@ enum CalendarModule {
         CalendarText.selfCheck()
         CalendarSource.selfCheck()
         TravelTime.selfCheck()
+        Weather.selfCheck()
 
         let now = Date()
         let day = Calendar.current.startOfDay(for: now)
@@ -149,7 +151,7 @@ enum CalendarModule {
         ]
         var counts: [Date: Int] = [:]
         for offset in [-2, 0, 1, 3] { counts[Calendar.current.date(byAdding: .day, value: offset, to: day)!] = offset == 0 ? 3 : 1 }
-        let weather = WeatherSnapshot(temperature: "21°", symbol: "cloud.sun.fill", condition: "Partly cloudy", detail: "Rain likely at 18:00 · 60%")
+        let weather = WeatherSnapshot(temperature: "21°", symbol: "cloud.sun.fill", condition: "Partly cloudy", detail: "Rain at 18:00 · 60%")
         let timer = TimerSnapshot(end: now.addingTimeInterval(4 * 60 + 12), duration: 5 * 60)
 
         let panel = CalendarPanel(events: events, weekCounts: counts, weather: weather, timer: nil, dismissedCount: 0, lunar: false, now: now)
