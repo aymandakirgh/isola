@@ -6,17 +6,25 @@ import SwiftUI
 enum SettingsModule {
     static func start() {
         License.shared.start()
+        Updates.shared.start()
         StatusItem.shared.install()
         Debug.on("settings.open") { SettingsWindow.show(section: $0["section"]) }
         Debug.on("settings.close") { _ in SettingsWindow.close() }
         Debug.on("settings.onboarding") { _ in OnboardingWindow.show() }
         Debug.on("license.set") { License.shared.activate($0["key"] ?? "") }
         Debug.on("license.reset") { _ in License.shared.reset() }
+        Debug.on("update.check") { _ in Updates.shared.check() }
+        Debug.on("update.prompt") { a in
+            var release = Updates.sample
+            release.version = a["version"] ?? release.version
+            Island.shared.post(Updates.prompt(release), duration: 8)
+        }
         if !UserDefaults.standard.bool(forKey: "onboarded") { OnboardingWindow.show() }
     }
 
     static func gallery() {
         License.selfCheck()
+        Updates.gallery()
         SettingsGallery.render()
     }
 }
@@ -26,18 +34,22 @@ enum SettingsModule {
 /// Menu content as data, so the real NSMenu and the gallery mock can't drift apart.
 enum MenuEntry {
     case nowPlaying(title: String, artist: String)
-    case action(String, symbol: String? = nil, key: String = "", run: () -> Void)
+    case action(String, symbol: String? = nil, key: String = "", checked: Bool = false, run: () -> Void)
     case submenu(String, symbol: String?, [MenuEntry])
     case separator
 
-    @MainActor static func entries(nowPlaying np: (title: String, artist: String, playing: Bool)?) -> [MenuEntry] {
+    @MainActor static func entries(nowPlaying np: (title: String, artist: String, playing: Bool, shuffle: Bool, repeatMode: Int)?) -> [MenuEntry] {
         var list: [MenuEntry] = []
         if let np {
             let commands = NowPlayingState.shared.commands
+            let repeatTitle = np.repeatMode == 1 ? "Repeat One" : np.repeatMode == 2 ? "Repeat All" : "Repeat"
             list += [
                 .nowPlaying(title: np.title, artist: np.artist),
                 .action(np.playing ? "Pause" : "Play", symbol: np.playing ? "pause.fill" : "play.fill") { commands.togglePlay() },
                 .action("Next Track", symbol: "forward.fill") { commands.next() },
+                .action("Previous Track", symbol: "backward.fill") { commands.previous() },
+                .action("Shuffle", symbol: "shuffle", checked: np.shuffle) { commands.toggleShuffle() },
+                .action(repeatTitle, symbol: np.repeatMode == 1 ? "repeat.1" : "repeat", checked: np.repeatMode != 0) { commands.cycleRepeat() },
                 .separator,
             ]
         }
@@ -98,7 +110,7 @@ final class StatusItem: NSObject, NSMenuDelegate {
         MainActor.assumeIsolated {
             let np = NowPlayingState.shared
             menu.removeAllItems()
-            let entries = MenuEntry.entries(nowPlaying: np.hasTrack ? (np.title, np.artist, np.isPlaying) : nil)
+            let entries = MenuEntry.entries(nowPlaying: np.hasTrack ? (np.title, np.artist, np.isPlaying, np.shuffle, np.repeatMode) : nil)
             for entry in entries { menu.addItem(Self.item(for: entry)) }
         }
     }
@@ -113,9 +125,10 @@ final class StatusItem: NSObject, NSMenuDelegate {
             item.subtitle = artist
             item.isEnabled = false
             return item
-        case let .action(title, symbol, key, run):
+        case let .action(title, symbol, key, checked, run):
             let item = ClosureMenuItem(title, key: key, run: run)
             item.image = symbol.flatMap(Self.symbol)
+            item.state = checked ? .on : .off
             return item
         case let .submenu(title, symbol, children):
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -209,17 +222,18 @@ enum SettingsGallery {
         var me = license.thisMac
         me.activated = Date().addingTimeInterval(-3 * 24 * hour)
         license.preview(key: License.makeKey(seed: 7), devices: [me, studio], firstLaunch: Date().addingTimeInterval(-300 * hour))
+        Updates.shared.preview(Updates.sample, checked: Date().addingTimeInterval(-2 * hour))
         window("settings-license-licensed", section: "license")
 
         for step in OnboardingModel.Step.allCases {
             let model = OnboardingModel()
             model.step = step
-            model.statuses = [.accessibility: .granted, .calendar: .notDetermined, .bluetooth: .granted, .automation: .denied]
+            model.statuses = [.accessibility: .granted, .calendar: .notDetermined, .bluetooth: .granted, .automation: .denied, .focus: .notDetermined, .fullDiskAccess: .denied]
             if let dir = directory { capture(OnboardingWindow.makeWindow(model: model), name: "onboarding-\(step)", dir: dir) }
         }
 
         snapshot("statusmenu", size: CGSize(width: 300, height: 300)) {
-            StatusMenuMock(entries: MenuEntry.entries(nowPlaying: ("Ocean City", "Pacific Coliseum", true)))
+            StatusMenuMock(entries: MenuEntry.entries(nowPlaying: ("Ocean City", "Pacific Coliseum", true, true, 2)))
         }
         snapshot("statusmenu-idle", size: CGSize(width: 300, height: 190)) {
             StatusMenuMock(entries: MenuEntry.entries(nowPlaying: nil))
@@ -257,8 +271,8 @@ struct StatusMenuMock: View {
             Divider().padding(.vertical, 4).padding(.horizontal, 8)
         case let .nowPlaying(title, artist):
             line(symbol: "music.note", title: title, subtitle: artist, trailing: nil, dim: true)
-        case let .action(title, symbol, key, _):
-            line(symbol: symbol, title: title, subtitle: nil, trailing: key.isEmpty ? nil : "⌘\(key.uppercased())", dim: false)
+        case let .action(title, symbol, key, checked, _):
+            line(symbol: symbol, title: title, subtitle: nil, trailing: checked ? "✓" : key.isEmpty ? nil : "⌘\(key.uppercased())", dim: false)
         case let .submenu(title, symbol, _):
             line(symbol: symbol, title: title, subtitle: nil, trailing: "›", dim: false)
         }

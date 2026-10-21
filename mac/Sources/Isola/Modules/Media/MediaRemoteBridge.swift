@@ -60,7 +60,7 @@ final class MediaRemoteBridge {
         process = nil
     }
 
-    /// `cmd <MRCommand>`, `seek <seconds>` or `rate <x>`.
+    /// `cmd <MRCommand>`, `seek <seconds>`, `rate <x>` or `like <0|1>`.
     func send(_ line: String) {
         try? input?.write(contentsOf: Data((line + "\n").utf8))
     }
@@ -91,6 +91,11 @@ final class MediaRemoteBridge {
         s.shuffle = (num("shuffle") ?? 1) >= 2
         s.repeatMode = switch Int(num("repeat") ?? 1) { case 2: 1; case 3: 2; default: 0 }
         s.explicit = (num("explicit") ?? 0) > 0
+        s.inTransition = (num("transition") ?? 0) > 0
+        s.canLike = (num("canLike") ?? 0) > 0
+        s.liked = num("liked").map { $0 > 0 }
+        s.link = NowPlayingExtras.appleMusicLink(o["subscriptionStoreID"], o["storeID"])
+        s.audioFormat = NowPlayingExtras.audioFormat(tier: num("tier").map { Int($0) }, rendering: num("rendering").map { Int($0) })
         if let pid = num("pid"), pid > 0 { s.bundleID = NSRunningApplication(processIdentifier: pid_t(pid))?.bundleIdentifier }
         if let b64 = o["artwork"] as? String, let bytes = Data(base64Encoded: b64) {
             artwork = NSImage(data: bytes)
@@ -103,7 +108,9 @@ final class MediaRemoteBridge {
             s.artwork = artwork
             s.artworkID = artworkID
         }
-        latest = s.title.isEmpty && s.artist.isEmpty ? nil : s
+        // Media without metadata (a video, an untitled stream) still counts while it plays or has a length.
+        let untitled = s.title.isEmpty && s.artist.isEmpty
+        latest = untitled && !s.isPlaying && s.duration <= 0 ? nil : s
         onUpdate?()
     }
 }

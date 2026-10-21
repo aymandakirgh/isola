@@ -15,6 +15,12 @@ final class CalendarPreferences {
     /// Minutes before an event starts that its live activity appears.
     var leadMinutes: Int = load("calendar.leadMinutes", 10) { didSet { store.set(leadMinutes, forKey: "calendar.leadMinutes"); CalendarSource.shared.evaluate() } }
     var timeToLeave: Bool = load("calendar.timeToLeave", true) { didSet { store.set(timeToLeave, forKey: "calendar.timeToLeave") } }
+    /// With location access, alerts come at start − travel time − `leaveBuffer` minutes…
+    var travelMode: TravelMode = TravelMode(rawValue: load("calendar.travelMode", "driving")) ?? .driving {
+        didSet { store.set(travelMode.rawValue, forKey: "calendar.travelMode") }
+    }
+    var leaveBuffer: Int = load("calendar.leaveBuffer", 5) { didSet { store.set(leaveBuffer, forKey: "calendar.leaveBuffer") } }
+    /// …otherwise a fixed number of minutes before the start.
     var leaveMinutes: Int = load("calendar.leaveMinutes", 15) { didSet { store.set(leaveMinutes, forKey: "calendar.leaveMinutes") } }
 
     // Which events show
@@ -25,8 +31,8 @@ final class CalendarPreferences {
     /// Event ids dismissed with a swipe; "Restore dismissed" clears them.
     var dismissed: [String] = load("calendar.dismissed", []) { didSet { store.set(dismissed, forKey: "calendar.dismissed"); CalendarSource.shared.evaluate() } }
 
-    // Expanded calendar look
-    var calendarColors: Bool = load("calendar.colors", true) { didSet { store.set(calendarColors, forKey: "calendar.colors") } }
+    // Calendar look (colours also tint the live activity, its peek and the Lock Screen widget)
+    var calendarColors: Bool = load("calendar.colors", true) { didSet { store.set(calendarColors, forKey: "calendar.colors"); CalendarSource.shared.evaluate() } }
     var splitAllDay: Bool = load("calendar.splitAllDay", true) { didSet { store.set(splitAllDay, forKey: "calendar.splitAllDay") } }
     var lunar: Bool = load("calendar.lunar", false) { didSet { store.set(lunar, forKey: "calendar.lunar") } }
     /// "calendar", "fantastical" or "notion": what clicking today's date opens.
@@ -74,12 +80,13 @@ enum CalendarModule {
     }
 
     private static func registerDebug() {
+        // `in` and `length` are minutes (a negative `in` with a long `length` makes a multi-day event).
         Debug.on("cal.event") { args in
             let minutes = Double(args["in"] ?? "5") ?? 5
             let start = Date().addingTimeInterval(minutes * 60)
             let event = CalendarEvent(
                 id: "debug-\(UUID().uuidString)", title: args["title"] ?? "Design review", start: start,
-                end: start.addingTimeInterval(45 * 60), calendarColor: .systemPurple, location: args["location"]
+                end: start.addingTimeInterval((Double(args["length"] ?? "45") ?? 45) * 60), calendarColor: .systemPurple, location: args["location"]
             )
             CalendarModel.shared.debugEvents.append(event)
             CalendarSource.shared.reload()
@@ -90,7 +97,19 @@ enum CalendarModule {
                 id: "debug-leave-\(UUID().uuidString)", title: args["title"] ?? "Dinner at Marta's", start: start,
                 end: start.addingTimeInterval(3600), calendarColor: .systemOrange, location: args["location"] ?? "Via Roma 12"
             )
-            Island.shared.post(CalendarItems.leave(event, now: Date()), duration: 6)
+            let travel = args["travel"].flatMap(Double.init).map { $0 * 60 }  // minutes, as if from Apple Maps
+            Island.shared.post(CalendarItems.leave(event, now: Date(), travel: travel), duration: 6)
+        }
+        // e.g. isolactl cal.pref colors=0 travelMode=walking leaveBuffer=10
+        Debug.on("cal.pref") { args in
+            let p = CalendarPreferences.shared
+            if let v = args["colors"] { p.calendarColors = v == "1" }
+            if let v = args["travelMode"].flatMap(TravelMode.init(rawValue:)) { p.travelMode = v }
+            if let v = args["leaveBuffer"].flatMap(Int.init) { p.leaveBuffer = v }
+        }
+        Debug.on("cal.state") { _ in
+            let state = CalendarState.shared
+            Debug.reply("authorized=\(state.authorized) today=\(state.today.count) location=\(Weather.shared.locationAuthorized) travel: \(TravelTime.shared.report)")
         }
         Debug.on("cal.clear") { _ in
             CalendarModel.shared.debugEvents = []
@@ -99,12 +118,14 @@ enum CalendarModule {
         }
         Debug.on("timer.start") { CalendarTimer.shared.start(Double($0["seconds"] ?? "300") ?? 300) }
         Debug.on("timer.stop") { _ in CalendarTimer.shared.stop() }
+        Debug.on("timer.pause") { _ in CalendarTimer.shared.togglePause() }
         Debug.on("weather.set") { args in
             let w = WeatherState.shared
             if let t = args["temp"].flatMap(Double.init) { w.temperature = t }
             if let s = args["symbol"] { w.symbol = s }
             if let c = args["condition"] { w.condition = c }
             if let p = args["rain"].flatMap(Double.init) { w.precipitationChance = p }
+            if let d = args["detail"] { w.precipitationDetail = d.isEmpty ? nil : d }  // e.g. detail="Snow from 07:00 · 80%"
             w.available = true
         }
     }
@@ -115,6 +136,9 @@ enum CalendarModule {
         registerSettings()
         WeatherCode.selfCheck()
         CalendarText.selfCheck()
+        CalendarSource.selfCheck()
+        TravelTime.selfCheck()
+        Weather.selfCheck()
 
         let now = Date()
         let day = Calendar.current.startOfDay(for: now)
@@ -134,25 +158,40 @@ enum CalendarModule {
         ]
         var counts: [Date: Int] = [:]
         for offset in [-2, 0, 1, 3] { counts[Calendar.current.date(byAdding: .day, value: offset, to: day)!] = offset == 0 ? 3 : 1 }
-        let weather = WeatherSnapshot(temperature: "21°", symbol: "cloud.sun.fill", condition: "Partly cloudy", detail: "Rain likely at 18:00 · 60%")
+        let weather = WeatherSnapshot(temperature: "21°", symbol: "cloud.sun.fill", condition: "Partly cloudy", detail: "Rain at 18:00 · 60%")
         let timer = TimerSnapshot(end: now.addingTimeInterval(4 * 60 + 12), duration: 5 * 60)
 
         let panel = CalendarPanel(events: events, weekCounts: counts, weather: weather, timer: nil, dismissedCount: 0, lunar: false, now: now)
         let emptyPanel = CalendarPanel(events: [events[0]], weekCounts: counts, weather: weather, timer: nil, dismissedCount: 2, lunar: true, now: now)
         let timerPanel = CalendarPanel(events: events, weekCounts: counts, weather: weather, timer: timer, dismissedCount: 0, lunar: false, now: now)
+        // Split days: an all-day offsite and a timed conference, both yesterday → tomorrow.
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: day)!
+        let multiDay = [
+            CalendarEvent(id: "g-offsite", title: "Lisbon offsite", start: yesterday, end: yesterday.addingTimeInterval(3 * 86400), calendarColor: .systemGreen, isAllDay: true),
+            CalendarEvent(id: "g-conf", title: "Web Summit", start: yesterday.addingTimeInterval(9 * 3600), end: yesterday.addingTimeInterval(2 * 86400 + 18 * 3600), calendarColor: .systemBlue, location: "FIL, Lisbon"),
+            review,
+        ]
+        let week = Calendar.current.dateInterval(of: .weekOfYear, for: day)!
+        let multiDayPanel = CalendarPanel(
+            events: multiDay, weekCounts: CalendarSource.counts(multiDay, in: week), weather: weather, timer: nil, dismissedCount: 0, lunar: false, now: now
+        )
 
         for (suffix, g) in [("pill", NotchGeometry.pillPreview), ("notch", NotchGeometry.notchPreview)] {
             Gallery.island("calendar-activity-\(suffix)", item: CalendarItems.event(review, panel: panel), geometry: g)
             Gallery.island("calendar-leave-\(suffix)", item: CalendarItems.leave(dinner, now: now), geometry: g)
             Gallery.island("calendar-timer-\(suffix)", item: CalendarItems.timer(snapshot: timer), geometry: g)
         }
+        Gallery.island("calendar-leave-travel", item: CalendarItems.leave(dinner, now: now, travel: 25 * 60))
         Gallery.island("calendar-activity-peek", item: CalendarItems.event(review, panel: panel), peeking: true)
+        Gallery.island("calendar-activity-peek-nocolor", item: CalendarItems.event(review, panel: panel, colors: false), peeking: true)
+        Gallery.island("calendar-timer-paused", item: CalendarItems.timer(snapshot: TimerSnapshot(end: timer.end, duration: timer.duration, paused: 252)))
         Gallery.island("calendar-timer-done", item: CalendarItems.timerDone())
         Gallery.island("calendar-idle", item: CalendarItems.idle(panel: panel, nextEvent: review))
         Gallery.island("calendar-expanded-events", item: CalendarItems.event(review, panel: panel), expanded: true)
         Gallery.island("calendar-expanded-empty", item: CalendarItems.event(review, panel: emptyPanel), expanded: true)
+        Gallery.island("calendar-expanded-multiday", item: CalendarItems.event(review, panel: multiDayPanel), expanded: true)
         Gallery.island("calendar-expanded-timer", item: CalendarItems.event(review, panel: timerPanel), expanded: true, geometry: .notchPreview)
-        Gallery.add("calendar-settings", size: CGSize(width: 560, height: 980)) {
+        Gallery.add("calendar-settings", size: CGSize(width: 560, height: 1120)) {
             CalendarSettingsView().background(Color(nsColor: .windowBackgroundColor))
         }
     }

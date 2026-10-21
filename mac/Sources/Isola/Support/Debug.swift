@@ -27,7 +27,7 @@ enum Debug {
         let island = Island.shared
         on("hover") { island.setHovering($0["on"] != "0") }
         on("press") { island.setPressed($0["on"] != "0") }
-        on("tap") { _ in island.tap() }
+        on("tap") { island.tap(option: $0["option"] == "1") }
         on("expand") { island.setExpanded($0["on"] != "0") }
         on("peek") { island.quickPeek($0["on"] != "0", for: $0["for"].flatMap(Double.init)) }
         on("cycle") { _ in island.cycle() }

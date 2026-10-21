@@ -161,20 +161,19 @@ private enum LockScreenGallery {
 
         var paused = s
         paused.track?.isPlaying = false
-        let cards: [(String, LockTrack?, NowPlayingWidgetStyle, Bool)] = [
-            ("lockscreen-nowplaying-glass", s.track, .glass, false),
-            ("lockscreen-nowplaying-dark", s.track, .dark, false),
-            ("lockscreen-nowplaying-artwork", s.track, .artwork, false),
-            ("lockscreen-nowplaying-paused", paused.track, .glass, false),
-            ("lockscreen-nowplaying-volume", s.track, .glass, true),
-            ("lockscreen-nowplaying-empty", nil, .glass, false),
+        let cards: [(String, NowPlayingWidget)] = [
+            ("lockscreen-nowplaying-glass", NowPlayingWidget(track: s.track)),
+            ("lockscreen-nowplaying-dark", NowPlayingWidget(track: s.track, style: .dark)),
+            ("lockscreen-nowplaying-artwork", NowPlayingWidget(track: s.track, style: .artwork)),
+            ("lockscreen-nowplaying-clear", NowPlayingWidget(track: s.track, style: .clear)),
+            ("lockscreen-nowplaying-grayscale", NowPlayingWidget(track: s.track, style: .artwork, grayscale: true)),
+            ("lockscreen-nowplaying-paused", NowPlayingWidget(track: paused.track)),
+            ("lockscreen-nowplaying-volume", NowPlayingWidget(track: s.track, volume: .constant(0.62))),
+            ("lockscreen-nowplaying-muted", NowPlayingWidget(track: s.track, output: .preset("airpodspro"), volume: .constant(0.62, muted: true))),
+            ("lockscreen-nowplaying-empty", NowPlayingWidget(track: nil)),
         ]
-        for (name, track, style, volume) in cards {
-            Gallery.add(name, size: CGSize(width: 420, height: 280)) {
-                backdrop {
-                    NowPlayingWidget(track: track, style: style, volume: volume ? .constant(0.62) : nil)
-                }
-            }
+        for (name, card) in cards {
+            Gallery.add(name, size: CGSize(width: 420, height: 280)) { backdrop { card } }
         }
 
         Gallery.add("lockscreen-info-compact", size: CGSize(width: 1040, height: 90)) {
@@ -182,6 +181,9 @@ private enum LockScreenGallery {
         }
         Gallery.add("lockscreen-info-detailed", size: CGSize(width: 1240, height: 90)) {
             backdrop { LockInfoRow(data: s, options: LockScreenOptions(weatherStyle: .detailed)) }
+        }
+        Gallery.add("lockscreen-info-nocolor", size: CGSize(width: 1040, height: 90)) {
+            backdrop { LockInfoRow(data: s, options: LockScreenOptions(calendarColors: false)) }
         }
         var charging = s
         charging.battery = LockBattery(level: 0.46, charging: true, timeToEmpty: nil)

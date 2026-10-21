@@ -4,7 +4,8 @@ import SwiftUI
 private let store = UserDefaults.standard
 private func flag(_ key: String, _ fallback: Bool) -> Bool { store.object(forKey: key) as? Bool ?? fallback }
 
-/// Settings for system-driven notifications and live activities.
+/// Settings for system-driven notifications and live activities. Turning a sound on
+/// plays it once as a preview.
 @MainActor @Observable
 final class SystemPreferences {
     static let shared = SystemPreferences()
@@ -24,7 +25,7 @@ final class SystemPreferences {
         didSet { store.set(lowBatteryThreshold, forKey: "system.lowBatteryThreshold") }
     }
     var lowBatterySound = flag("system.lowBatterySound", true) {
-        didSet { store.set(lowBatterySound, forKey: "system.lowBatterySound") }
+        didSet { store.set(lowBatterySound, forKey: "system.lowBatterySound"); if lowBatterySound { Sounds.lowBattery() } }
     }
     var lowPowerNotification = flag("system.lowPowerNotification", true) {
         didSet { store.set(lowPowerNotification, forKey: "system.lowPowerNotification") }
@@ -42,7 +43,7 @@ final class SystemPreferences {
         didSet { store.set(deviceLowBattery, forKey: "system.deviceLowBattery") }
     }
     var deviceLowBatterySound = flag("system.deviceLowBatterySound", true) {
-        didSet { store.set(deviceLowBatterySound, forKey: "system.deviceLowBatterySound") }
+        didSet { store.set(deviceLowBatterySound, forKey: "system.deviceLowBatterySound"); if deviceLowBatterySound { Sounds.lowBattery() } }
     }
 
     // Focus
@@ -51,6 +52,10 @@ final class SystemPreferences {
     }
     var focusActivity = flag("system.focusActivity", false) {
         didSet { store.set(focusActivity, forKey: "system.focusActivity"); FocusMonitor.shared.syncActivity() }
+    }
+    /// A soft sound when the Sleep Focus turns on (telling Sleep apart needs Full Disk Access).
+    var sleepFocusSound = flag("system.sleepFocusSound", false) {
+        didSet { store.set(sleepFocusSound, forKey: "system.sleepFocusSound"); if sleepFocusSound { Sounds.sleepFocus() } }
     }
 
     // Lock
@@ -84,9 +89,18 @@ struct SystemSettingsView: View {
                 Toggle("Low battery sound for devices", isOn: $prefs.deviceLowBatterySound)
                     .disabled(!prefs.deviceLowBattery)
             }
-            Section("Focus") {
+            Section {
                 Toggle("Focus changes", isOn: $prefs.focusNotification)
                 Toggle("Focus live activity", isOn: $prefs.focusActivity)
+                Toggle("Sound when Sleep turns on", isOn: $prefs.sleepFocusSound)
+                PermissionRow(permission: .focus)
+                PermissionRow(permission: .fullDiskAccess)
+            } header: {
+                Text("Focus")
+            } footer: {
+                Text("Without Full Disk Access, Isola can only tell that a Focus is on, not which one.")
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Section("Lock") {
                 Toggle("Lock live activity", isOn: $prefs.lockActivity)
@@ -95,5 +109,30 @@ struct SystemSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// A permission's live status (re-checked every 2 s while shown) and what to do about it.
+private struct PermissionRow: View {
+    let permission: Permission
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 2)) { _ in
+            // The gallery shows a first run rather than probing this machine.
+            let status: PermissionStatus = SystemModule.renderingGallery ? (permission == .focus ? .notDetermined : .denied) : permission.status()
+            LabeledContent {
+                switch status {
+                case .granted:
+                    Label("Allowed", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                case .denied:
+                    Button("Open Settings…") { permission.openSystemSettings() }
+                case .notDetermined:
+                    Button("Allow…") { permission.request {} }
+                }
+            } label: {
+                Text(permission.title)
+                Text(permission.detail)
+            }
+        }
     }
 }

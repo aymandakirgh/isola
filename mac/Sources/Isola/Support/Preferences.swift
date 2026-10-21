@@ -40,13 +40,17 @@ final class Preferences {
     // Behaviour
     /// Seconds of hovering before the island expands; 0 disables expand-on-hover.
     var hoverExpandDelay: Double = load("hoverExpandDelay", 0) { didSet { store.set(hoverExpandDelay, forKey: "hoverExpandDelay") } }
+    /// Off: clicking or hovering an inactive activity (paused media) doesn't open its panel.
+    var expandWhileInactive: Bool = load("expandWhileInactive", true) { didSet { store.set(expandWhileInactive, forKey: "expandWhileInactive") } }
+    /// With two or more live activities, the next one sits in a bubble beside the island.
+    var duo: Bool = load("duo", false) { didSet { store.set(duo, forKey: "duo") } }
     var notificationDuration: Double = load("notificationDuration", 3.5) { didSet { store.set(notificationDuration, forKey: "notificationDuration") } }
     /// Swipes follow content direction (like scrolling) rather than finger direction.
     var naturalSwipe: Bool = load("naturalSwipe", false) { didSet { store.set(naturalSwipe, forKey: "naturalSwipe") } }
     var speed: AnimationSpeed = loadEnum("speed", .smooth) { didSet { store.set(speed.rawValue, forKey: "speed") } }
     var overshoot: Bool = load("overshoot", true) { didSet { store.set(overshoot, forKey: "overshoot") } }
-    var unlockSound: Bool = load("unlockSound", true) { didSet { store.set(unlockSound, forKey: "unlockSound") } }
-    var lockSound: Bool = load("lockSound", false) { didSet { store.set(lockSound, forKey: "lockSound") } }
+    var unlockSound: Bool = load("unlockSound", true) { didSet { store.set(unlockSound, forKey: "unlockSound"); if unlockSound { Sounds.unlock() } } }
+    var lockSound: Bool = load("lockSound", false) { didSet { store.set(lockSound, forKey: "lockSound"); if lockSound { Sounds.lock() } } }
 
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
@@ -67,6 +71,8 @@ final class Preferences {
         case "heightTweak": heightTweak = Double(value) ?? 0
         case "widthTweak": widthTweak = Double(value) ?? 0
         case "hoverExpandDelay": hoverExpandDelay = Double(value) ?? 0
+        case "expandWhileInactive": expandWhileInactive = value == "1" || value == "true"
+        case "duo": duo = value == "1" || value == "true"
         case "notificationDuration": notificationDuration = Double(value) ?? 3.5
         case "naturalSwipe": naturalSwipe = value == "1" || value == "true"
         case "speed": speed = AnimationSpeed(rawValue: value) ?? .smooth

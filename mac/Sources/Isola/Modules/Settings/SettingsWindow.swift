@@ -140,12 +140,44 @@ struct TweakSlider: View {
     var body: some View {
         LabeledContent(title) {
             HStack {
-                Slider(value: Binding(get: { value }, set: { value = $0.rounded() }), in: range)
+                Slider(value: Binding(get: { value }, set: { step(to: $0.rounded()) }), in: range)
                 Text("\(value > 0 ? "+" : "")\(Int(value)) pt")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .frame(width: 48, alignment: .trailing)
             }
+        }
+    }
+
+    /// Each whole-point step gets a haptic bump and a very quiet tick.
+    private func step(to new: Double) {
+        guard new != value else { return }
+        value = new
+        FineTuneFeedback.tick()
+    }
+}
+
+/// Fine-tuner feedback, debounced so a fast drag doesn't rattle.
+@MainActor
+enum FineTuneFeedback {
+    private static var last = Date.distantPast
+
+    static func tick() {
+        let now = Date()
+        guard now.timeIntervalSince(last) > 0.05 else { return }
+        last = now
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        Sounds.play("Tink", volume: 0.08)
+    }
+}
+
+extension View {
+    /// Tahoe: Liquid Glass buttons on macOS 26 and later, the bordered look before.
+    @ViewBuilder func glassButton(prominent: Bool = false) -> some View {
+        if #available(macOS 26, *) {
+            if prominent { buttonStyle(.glassProminent) } else { buttonStyle(.glass) }
+        } else {
+            if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
         }
     }
 }
@@ -190,19 +222,32 @@ struct GeneralPage: View {
                         prefs.widthTweak = 0
                         prefs.heightTweak = 0
                     }
+                    .glassButton()
                     .disabled(prefs.widthTweak == 0 && prefs.heightTweak == 0)
                 }
             }
-            Section("Hide the island") {
+            Section {
                 Toggle("In fullscreen apps", isOn: $prefs.hideInFullscreen)
                 Toggle("While gaming", isOn: $prefs.hideWhileGaming)
                 Toggle("In Mission Control", isOn: $prefs.hideInMissionControl)
                 Toggle("From screenshots and recordings", isOn: $prefs.hideFromScreenCapture)
+            } header: {
+                Text("Hide the island")
+            } footer: {
+                Text("A fullscreen app hides the island only on its own display; Mission Control hides it everywhere.")
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Section("Appearance") {
+            Section {
                 Picker("Outline", selection: $prefs.outline) {
                     ForEach(OutlineStyle.allCases) { Text($0.title).tag($0) }
                 }
+            } header: {
+                Text("Appearance")
+            } footer: {
+                Text("Colored takes the playing artwork's colours, Compact draws a hairline only while the island is compact, and Contrast adds a brighter edge for dark wallpapers.")
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .formStyle(.grouped)
@@ -221,6 +266,10 @@ struct IslandPage: View {
                         Text(delay == 0 ? "Off" : "After \(delay.formatted()) s").tag(delay)
                     }
                 }
+                Toggle(isOn: $prefs.expandWhileInactive) {
+                    Text("Expand while inactive")
+                    Text("Clicking or hovering paused media opens its player.")
+                }
                 LabeledContent("Show notifications for") {
                     HStack {
                         Slider(value: Binding(get: { prefs.notificationDuration }, set: { prefs.notificationDuration = ($0 * 2).rounded() / 2 }), in: 1.5...8)
@@ -231,6 +280,12 @@ struct IslandPage: View {
                     }
                 }
                 Toggle("Natural swipe direction", isOn: $prefs.naturalSwipe)
+            }
+            Section("Activities") {
+                Toggle(isOn: $prefs.duo) {
+                    Text("Duo mode")
+                    Text("With two live activities running, the next one waits in a bubble beside the island. Click the bubble to swap them.")
+                }
             }
             Section {
                 Picker("Speed", selection: $prefs.speed) {
@@ -269,15 +324,9 @@ struct AboutPage: View {
                 Text("Dynamic Island for your Mac").foregroundStyle(.secondary)
                 Text("Version \(version) (\(build))").font(.callout).foregroundStyle(.tertiary)
             }
-            HStack(spacing: 10) {
-                Link("Website", destination: License.website)
-                Text("·").foregroundStyle(.tertiary)
-                Link("Changelog", destination: License.website.appendingPathComponent("changelog"))
-                Text("·").foregroundStyle(.tertiary)
-                Link("FAQs", destination: License.website.appendingPathComponent("faqs"))
-            }
-            .font(.callout)
+            links.font(.callout)
             Button("Show Welcome Again") { OnboardingWindow.show() }
+                .glassButton()
                 .padding(.top, 4)
             Spacer()
             Text("On macOS 26 or later you can hide the menu bar icon from System Settings › Menu Bar.")
@@ -288,6 +337,28 @@ struct AboutPage: View {
                 .padding(.bottom, 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder private var links: some View {
+        let website = License.website
+        if #available(macOS 26, *) {
+            // Tahoe: Liquid Glass capsules that blend as one group.
+            GlassEffectContainer {
+                HStack(spacing: 8) {
+                    Link("Website", destination: website).buttonStyle(.glass)
+                    Link("Changelog", destination: website.appendingPathComponent("changelog")).buttonStyle(.glass)
+                    Link("FAQs", destination: website.appendingPathComponent("faqs")).buttonStyle(.glass)
+                }
+            }
+        } else {
+            HStack(spacing: 10) {
+                Link("Website", destination: website)
+                Text("·").foregroundStyle(.tertiary)
+                Link("Changelog", destination: website.appendingPathComponent("changelog"))
+                Text("·").foregroundStyle(.tertiary)
+                Link("FAQs", destination: website.appendingPathComponent("faqs"))
+            }
+        }
     }
 }
 

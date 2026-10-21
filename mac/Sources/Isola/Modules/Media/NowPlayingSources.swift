@@ -18,6 +18,15 @@ struct NowPlayingSnapshot {
     var bundleID: String?
     var explicit = false
     var link: URL?
+    /// No `link`, but the player can be asked for one when the user copies (Spotify, browser tabs).
+    var canFetchLink = false
+    /// The source takes a like; `liked` is nil when it does not say whether the track is liked.
+    var canLike = false
+    var liked: Bool?
+    /// Apple Music AutoMix is crossfading into the next track.
+    var inTransition = false
+    /// "Lossless", "Hi-Res Lossless" or "Dolby Atmos".
+    var audioFormat: String?
 }
 
 /// Polls/receives now-playing info and routes media commands to whichever source is live:
@@ -31,6 +40,13 @@ final class NowPlayingSources {
     private(set) var source: Source = .none
     private let remote = MediaRemote()
     private var lastScriptPoll = Date.distantPast
+    private var scriptPolling = false
+    /// What the snapshots do not carry: Automation consent per app (only ever checked, never asked
+    /// for here) and a like known better than the source says (Music's AppleScript, a fresh click).
+    private var last: NowPlayingSnapshot?
+    private var trackKey = ""
+    private var automation: [String: OSStatus] = [:]
+    private var liked: (value: Bool, until: Date)?
 
     func start() {
         remote.register()
@@ -59,24 +75,146 @@ final class NowPlayingSources {
         guard !SimulatedPlayer.shared.active else { return }
         if let snapshot {
             source = .mediaRemote
-            return MediaController.shared.apply(snapshot)
+            return deliver(snapshot)
         }
         // Direct MediaRemote is silent (blocked on macOS 15.4+): use the perl-hosted helper.
         if let bridged = MediaRemoteBridge.shared.latest {
             source = .bridge
-            return MediaController.shared.apply(bridged)
+            return deliver(bridged)
         }
-        // Nothing playing, or no helper. Ask the scriptable players.
-        guard Date().timeIntervalSince(lastScriptPoll) > 0.8 else { return }
+        // Nothing playing, or no helper. Ask the scriptable players, off the main thread and only
+        // those Automation already allows: an idle Music or Spotify must not stall the UI or prompt.
+        let interval: TimeInterval = if case .script = source { 0.8 } else { 3 }
+        guard !scriptPolling, Date().timeIntervalSince(lastScriptPoll) > interval else { return }
         lastScriptPoll = Date()
-        for player in ScriptPlayer.allCases where player.isRunning {
-            if let s = player.snapshot() {
-                source = .script(player)
-                return MediaController.shared.apply(s)
+        scriptPolling = true
+        Scripting.queue.async {
+            let found = ScriptPlayer.allCases.lazy
+                .filter { $0.isRunning && Scripting.consent($0.bundleID) == noErr }
+                .compactMap { player in player.snapshot().map { (player, $0) } }
+                .first
+            DispatchQueue.main.async { MainActor.assumeIsolated { NowPlayingSources.shared.scripted(found) } }
+        }
+    }
+
+    private func scripted(_ found: (ScriptPlayer, NowPlayingSnapshot)?) {
+        scriptPolling = false
+        // The helper may have spoken while the script ran; it wins.
+        guard !SimulatedPlayer.shared.active, MediaRemoteBridge.shared.latest == nil else { return }
+        source = found.map { .script($0.0) } ?? .none
+        deliver(found?.1)
+    }
+
+    /// Adds the consent-gated extras, then hands the snapshot to the Media module.
+    private func deliver(_ snapshot: NowPlayingSnapshot?) {
+        last = snapshot
+        guard var s = snapshot else { return MediaController.shared.apply(nil) }
+        let key = "\(s.bundleID ?? "")\u{1f}\(s.title)\u{1f}\(s.artist)"
+        if key != trackKey {
+            trackKey = key
+            liked = nil
+            checkConsent(s.bundleID)
+        }
+        if let id = s.bundleID {
+            // Liking in Music and copying from Spotify or a browser may ask for Automation once, on
+            // the click; only an app the user denied loses the button.
+            let consent = automation[id]
+            let askable = consent == noErr || consent == OSStatus(errAEEventWouldRequireUserConsent)
+            s.canFetchLink = s.link == nil && askable && (id == ScriptPlayer.spotify.bundleID || Browser(bundleID: id) != nil)
+            // Music favourites go through AppleScript, whatever MediaRemote offers.
+            if id == ScriptPlayer.music.bundleID { s.canLike = askable }
+        }
+        if let liked, s.liked == nil || Date() < liked.until { s.liked = liked.value }
+        MediaController.shared.apply(s)
+    }
+
+    /// Off the main thread: what Automation already allows for the source app (never prompts),
+    /// and Music's favourite flag when it may be read.
+    private func checkConsent(_ bundleID: String?) {
+        guard let id = bundleID, ScriptPlayer.allCases.contains(where: { $0.bundleID == id }) || Browser(bundleID: id) != nil else { return }
+        let key = trackKey
+        Scripting.queue.async {
+            let consent = Scripting.consent(id)
+            let favourite = consent == noErr && id == ScriptPlayer.music.bundleID ? ScriptPlayer.music.favourite() : nil
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let sources = NowPlayingSources.shared
+                    sources.automation[id] = consent
+                    if let favourite, key == sources.trackKey { sources.liked = (favourite, .distantFuture) }
+                    if key == sources.trackKey { sources.deliver(sources.last) }
+                }
             }
         }
-        source = .none
-        MediaController.shared.apply(nil)
+    }
+
+    /// Music: AppleScript favourite (the click may ask for Automation once). Others: MediaRemote's
+    /// LikeTrack, shown at once and corrected by the source within two seconds if it disagrees.
+    private func toggleLike() {
+        let state = NowPlayingState.shared
+        let want = !state.liked
+        liked = (want, Date().addingTimeInterval(2))
+        state.liked = want
+        if case .simulated = source { return SimulatedPlayer.shared.setLiked(want) }
+        guard state.sourceBundleID == ScriptPlayer.music.bundleID else {
+            if case .bridge = source { MediaRemoteBridge.shared.send("like \(want ? 1 : 0)") }
+            return
+        }
+        let key = trackKey
+        Scripting.queue.async {
+            let result = ScriptPlayer.music.setFavourite(want)
+            let consent = Scripting.consent(ScriptPlayer.music.bundleID)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let sources = NowPlayingSources.shared
+                    sources.automation[ScriptPlayer.music.bundleID] = consent
+                    guard key == sources.trackKey else { return }
+                    sources.liked = result.map { ($0, .distantFuture) }
+                    sources.deliver(sources.last)
+                }
+            }
+        }
+    }
+
+    /// Known links go straight to the pasteboard; Spotify and browsers are asked on the click.
+    private func copyLink(_ done: @escaping (Bool) -> Void) {
+        if let link = MediaUI.shared.link { return done(Self.copy(link)) }
+        let state = NowPlayingState.shared
+        guard let id = state.sourceBundleID else { return done(false) }
+        let title = state.title
+        Scripting.queue.async {
+            let link = id == ScriptPlayer.spotify.bundleID ? ScriptPlayer.spotify.trackLink()
+                : Browser(bundleID: id).flatMap { NowPlayingExtras.playingTab($0.tabs(), title: title) }.flatMap { URL(string: $0.url) }
+            let consent = Scripting.consent(id)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    NowPlayingSources.shared.automation[id] = consent
+                    done(link.map(Self.copy) ?? false)
+                }
+            }
+        }
+    }
+
+    private static func copy(_ link: URL) -> Bool {
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.setString(link.absoluteString, forType: .string)
+    }
+
+    /// Brings the player forward. For a browser, first the tab that plays, but only where
+    /// Automation already allows it; otherwise just the app, as before.
+    private func openSource() {
+        let state = NowPlayingState.shared
+        guard let id = state.sourceBundleID else { return }
+        guard let browser = Browser(bundleID: id) else { return Self.activate(id) }
+        let title = state.title
+        Scripting.queue.async {
+            if Scripting.consent(id) == noErr, let tab = NowPlayingExtras.playingTab(browser.tabs(), title: title) { browser.focus(tab) }
+            DispatchQueue.main.async { Self.activate(id) }
+        }
+    }
+
+    private nonisolated static func activate(_ bundleID: String) {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
     }
 
     private func installCommands() {
@@ -124,13 +262,9 @@ final class NowPlayingSources {
                 }
             }
         }
-        commands.openSource = {
-            MainActor.assumeIsolated {
-                guard let id = NowPlayingState.shared.sourceBundleID,
-                      let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return }
-                NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-            }
-        }
+        commands.openSource = { MainActor.assumeIsolated { NowPlayingSources.shared.openSource() } }
+        commands.toggleLike = { MainActor.assumeIsolated { NowPlayingSources.shared.toggleLike() } }
+        commands.copyLink = { done in MainActor.assumeIsolated { NowPlayingSources.shared.copyLink(done) } }
         NowPlayingState.shared.commands = commands
     }
 
@@ -150,6 +284,7 @@ final class MediaRemote {
         "kMRMediaRemoteNowPlayingApplicationDidChangeNotification",
     ]
 
+    /// Values as MRMediaRemoteCopyCommandDescription names them.
     enum Command: UInt32 {
         case play = 0, pause = 1, togglePlayPause = 2, stop = 3, nextTrack = 4, previousTrack = 5
         case advanceShuffleMode = 6, advanceRepeatMode = 7, changePlaybackRate = 19
@@ -213,6 +348,9 @@ final class MediaRemote {
         s.shuffle = (num("ShuffleMode") ?? 1) >= 2
         s.repeatMode = switch Int(num("RepeatMode") ?? 1) { case 2: 1; case 3: 2; default: 0 }
         s.explicit = (num("IsExplicitTrack") ?? 0) > 0
+        s.inTransition = (num("IsInTransition") ?? 0) > 0
+        s.link = NowPlayingExtras.appleMusicLink(d["kMRMediaRemoteNowPlayingInfoiTunesStoreSubscriptionAdamIdentifier"],
+                                                 d["kMRMediaRemoteNowPlayingInfoiTunesStoreIdentifier"])
         if pid > 0 { s.bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier }
         if let data = d["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data {
             let key = (d["kMRMediaRemoteNowPlayingInfoArtworkIdentifier"] as? String) ?? "\(s.title)|\(s.album)|\(data.count)"
@@ -224,28 +362,43 @@ final class MediaRemote {
     }
 }
 
-// MARK: - AppleScript fallback (Music, Spotify)
+// MARK: - AppleScript (Music, Spotify, browsers)
 
-enum ScriptPlayer: CaseIterable {
-    case music, spotify
-
-    var bundleID: String { self == .music ? "com.apple.Music" : "com.spotify.client" }
-    var isRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty }
-
-    private static let separator = "␟"
+/// All AppleScript runs on one serial queue, off the main thread: an Apple Event can take
+/// seconds, and the first one to an app may wait on the Automation prompt.
+enum Scripting {
+    static let queue = DispatchQueue(label: "app.isola.applescript", qos: .userInitiated)
+    static let field = "␟", record = "␞"
     private static var scripts: [String: NSAppleScript] = [:]
-    private static var artworkCache: [String: NSImage] = [:]
 
+    /// Call on `queue`.
     @discardableResult
-    private static func run(_ source: String) -> NSAppleEventDescriptor? {
+    static func run(_ source: String) -> NSAppleEventDescriptor? {
         let script = scripts[source] ?? NSAppleScript(source: source)
         scripts[source] = script
         var error: NSDictionary?
         return script?.executeAndReturnError(&error)
     }
 
+    /// Automation consent for an app, never prompting: noErr allowed, errAEEventNotPermitted denied,
+    /// errAEEventWouldRequireUserConsent not asked yet, procNotFound not running. May block: call on `queue`.
+    static func consent(_ bundleID: String) -> OSStatus {
+        let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
+        return AEDeterminePermissionToAutomateTarget(target.aeDesc, AEEventClass(typeWildCard), AEEventID(typeWildCard), false)
+    }
+}
+
+/// Reading Music/Spotify when MediaRemote says nothing. Every method runs scripts: call on `Scripting.queue`.
+enum ScriptPlayer: CaseIterable {
+    case music, spotify
+
+    var bundleID: String { self == .music ? "com.apple.Music" : "com.spotify.client" }
+    var isRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty }
+
+    private static var artworkCache: [String: NSImage] = [:]
+
     private var statusScript: String {
-        let s = Self.separator
+        let s = Scripting.field
         switch self {
         case .music:
             return """
@@ -270,8 +423,8 @@ enum ScriptPlayer: CaseIterable {
 
     /// Only call while the app runs: `tell` would otherwise launch it.
     func snapshot() -> NowPlayingSnapshot? {
-        guard isRunning, let out = Self.run(statusScript)?.stringValue else { return nil }
-        let f = out.components(separatedBy: Self.separator)
+        guard isRunning, let out = Scripting.run(statusScript)?.stringValue else { return nil }
+        let f = out.components(separatedBy: Scripting.field)
         guard f.count >= 9 else { return nil }
         func number(_ text: String) -> Double { Double(text.replacingOccurrences(of: ",", with: ".")) ?? 0 }
         var s = NowPlayingSnapshot()
@@ -289,16 +442,14 @@ enum ScriptPlayer: CaseIterable {
             s.repeatMode = f[7] == "one" ? 1 : f[7] == "all" ? 2 : 0
             if let cached = Self.artworkCache[f[8]] {
                 s.artwork = cached
-            } else if let data = Self.run("tell application id \"com.apple.Music\" to get raw data of artwork 1 of current track")?.data,
+            } else if let data = Scripting.run("tell application id \"com.apple.Music\" to get raw data of artwork 1 of current track")?.data,
                       let image = NSImage(data: data) {
                 Self.artworkCache = [f[8]: image]
                 s.artwork = image
             }
         case .spotify:
             s.repeatMode = f[7] == "true" ? 2 : 0
-            if f[8].hasPrefix("spotify:track:") {
-                s.link = URL(string: "https://open.spotify.com/track/" + f[8].dropFirst("spotify:track:".count))
-            }
+            s.link = NowPlayingExtras.spotifyLink(f[8])
             if f.count > 9, let url = URL(string: f[9]) {
                 if let cached = Self.artworkCache[f[9]] {
                     s.artwork = cached
@@ -313,16 +464,39 @@ enum ScriptPlayer: CaseIterable {
     private static func fetchArtwork(_ url: URL, key: String) {
         URLSession.shared.dataTask(with: url) { data, _, _ in
             guard let data, let image = NSImage(data: data) else { return }
-            DispatchQueue.main.async {
+            Scripting.queue.async {
                 artworkCache = [key: image]
-                MainActor.assumeIsolated { NowPlayingSources.shared.poll() }
+                DispatchQueue.main.async { MainActor.assumeIsolated { NowPlayingSources.shared.poll() } }
             }
         }.resume()
     }
 
+    /// A control the user pressed: runs even before Automation was granted (that is when macOS asks).
     func perform(_ command: String) {
-        guard isRunning else { return }
-        Self.run("tell application id \"\(bundleID)\" to \(command)")
+        Scripting.queue.async {
+            guard isRunning else { return }
+            Scripting.run("tell application id \"\(bundleID)\" to \(command)")
+        }
+    }
+
+    /// Music's favourite flag: `favorited`, formerly `loved`; both are the pLov property.
+    func favourite() -> Bool? {
+        Scripting.run("tell application id \"com.apple.Music\" to return («class pLov» of current track) as string")?.stringValue.map { $0 == "true" }
+    }
+
+    /// Sets the favourite flag and reads it back (nil when Music refused, e.g. a radio stream).
+    func setFavourite(_ on: Bool) -> Bool? {
+        Scripting.run("""
+        tell application id "com.apple.Music"
+          set «class pLov» of current track to \(on)
+          return («class pLov» of current track) as string
+        end tell
+        """)?.stringValue.map { $0 == "true" }
+    }
+
+    /// Spotify's share link for the current track or episode.
+    func trackLink() -> URL? {
+        Scripting.run("tell application id \"com.spotify.client\" to return id of current track")?.stringValue.flatMap(NowPlayingExtras.spotifyLink)
     }
 
     func toggleShuffle() {
@@ -344,6 +518,143 @@ enum ScriptPlayer: CaseIterable {
         case .spotify:
             perform("set repeating to not repeating")
         }
+    }
+}
+
+/// A tab as a browser's AppleScript lists it.
+struct BrowserTab: Equatable {
+    var window: Int
+    var index: Int
+    var active: Bool
+    var title: String
+    var url: String
+}
+
+/// Browsers whose dictionary lists windows › tabs with titles and URLs (Safari, and Chrome's
+/// dictionary shared by Edge, Brave, Arc, Vivaldi and Opera). Dia ships no AppleScript
+/// dictionary, so it is only brought forward. Methods run scripts: call on `Scripting.queue`.
+struct Browser {
+    let bundleID: String
+    private var isSafari: Bool { bundleID == "com.apple.Safari" }
+
+    init?(bundleID: String) {
+        let scriptable = ["com.apple.Safari", "com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser",
+                          "company.thebrowser.Browser", "com.vivaldi.Vivaldi", "com.operasoftware.Opera"]
+        guard scriptable.contains(bundleID) else { return nil }
+        self.bundleID = bundleID
+    }
+
+    /// Every tab of every window, front window first. «class acTI» is Chrome's `active tab index`.
+    func tabs() -> [BrowserTab] {
+        let f = Scripting.field, r = Scripting.record
+        let (title, active) = isSafari ? ("name", "index of current tab of window w") : ("title", "«class acTI» of window w")
+        let listing = Scripting.run("""
+        tell application id "\(bundleID)"
+          set out to ""
+          repeat with w from 1 to count of windows
+            try
+              set activeIndex to 0
+              try
+                set activeIndex to \(active)
+              end try
+              set titles to \(title) of every tab of window w
+              set urls to URL of every tab of window w
+              repeat with t from 1 to count of titles
+                set out to out & w & "\(f)" & t & "\(f)" & (t = activeIndex) & "\(f)" & ((item t of titles) as text) & "\(f)" & ((item t of urls) as text) & "\(r)"
+              end repeat
+            end try
+          end repeat
+          return out
+        end tell
+        """)
+        return listing?.stringValue.map(Self.parse) ?? []
+    }
+
+    static func parse(_ listing: String) -> [BrowserTab] {
+        listing.components(separatedBy: Scripting.record).compactMap { line in
+            let f = line.components(separatedBy: Scripting.field)
+            guard f.count == 5, let window = Int(f[0]), let index = Int(f[1]) else { return nil }
+            return BrowserTab(window: window, index: index, active: f[2] == "true", title: f[3], url: f[4])
+        }
+    }
+
+    /// Selects the tab, then raises its window (raising first would renumber the windows).
+    func focus(_ tab: BrowserTab) {
+        let w = tab.window, t = tab.index
+        let select = isSafari ? "set current tab of window \(w) to tab \(t) of window \(w)"
+            : bundleID == "company.thebrowser.Browser" ? "tell tab \(t) of window \(w) to select"
+            : "set «class acTI» of window \(w) to \(t)"
+        Scripting.run("""
+        tell application id "\(bundleID)"
+          try
+            \(select)
+          end try
+          try
+            set index of window \(w) to 1
+          end try
+        end tell
+        """)
+    }
+}
+
+/// Links and labels derived from what the sources report.
+enum NowPlayingExtras {
+    /// Apple Music catalogue ID (number or string, 0 for local files) → its song page;
+    /// music.apple.com redirects to the listener's storefront.
+    static func appleMusicLink(_ ids: Any?...) -> URL? {
+        let id = ids.lazy.compactMap { ($0 as? NSNumber)?.int64Value ?? ($0 as? String).flatMap { Int64($0) } }.first { $0 > 0 }
+        return id.flatMap { URL(string: "https://music.apple.com/song/\($0)") }
+    }
+
+    /// "spotify:track:ID" or "spotify:episode:ID" → open.spotify.com (local files and ads have none).
+    static func spotifyLink(_ uri: String) -> URL? {
+        let parts = uri.split(separator: ":")
+        guard parts.count == 3, parts[0] == "spotify", parts[1] == "track" || parts[1] == "episode" else { return nil }
+        return URL(string: "https://open.spotify.com/\(parts[1])/\(parts[2])")
+    }
+
+    /// MediaRemote audio tiers: 2 Lossless, 3 HighResolutionLossless, 4 Spatial; rendering mode 5 DolbyAtmos.
+    static func audioFormat(tier: Int?, rendering: Int?) -> String? {
+        if rendering == 5 || tier == 4 { return "Dolby Atmos" }
+        return tier == 3 ? "Hi-Res Lossless" : tier == 2 ? "Lossless" : nil
+    }
+
+    /// The tab that plays `title`: YouTube (or YouTube Music) with the title, then any tab with
+    /// the title, then a YouTube tab; ties go to an active tab, then to the frontmost window.
+    static func playingTab(_ tabs: [BrowserTab], title: String) -> BrowserTab? {
+        func rank(_ tab: BrowserTab) -> (Int, Int, Int) {
+            let host = URL(string: tab.url)?.host?.lowercased() ?? ""
+            let youtube = host == "youtube.com" || host.hasSuffix(".youtube.com") || host == "youtu.be"
+            let titled = !title.isEmpty && tab.title.localizedCaseInsensitiveContains(title)
+            return ((titled ? 2 : 0) + (youtube ? 1 : 0), tab.active ? 1 : 0, -tab.window)
+        }
+        return tabs.filter { rank($0).0 > 0 }.max { rank($0) < rank($1) }
+    }
+
+    static func selfCheck() {
+        precondition(appleMusicLink(NSNumber(value: 1440841766))?.absoluteString == "https://music.apple.com/song/1440841766")
+        precondition(appleMusicLink(0, "1440841766")?.absoluteString == "https://music.apple.com/song/1440841766")
+        precondition(appleMusicLink(nil, 0) == nil)
+        precondition(spotifyLink("spotify:track:4uLU6hMCjMI75M1A2tKUQC")?.absoluteString == "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC")
+        precondition(spotifyLink("spotify:episode:512ojhOuo1ktJprKbVcKyQ")?.absoluteString == "https://open.spotify.com/episode/512ojhOuo1ktJprKbVcKyQ")
+        precondition(spotifyLink("spotify:local:Artist:Album:Song:215") == nil && spotifyLink("spotify:ad:0000") == nil)
+        precondition(audioFormat(tier: 2, rendering: 1) == "Lossless" && audioFormat(tier: 3, rendering: nil) == "Hi-Res Lossless")
+        precondition(audioFormat(tier: 4, rendering: nil) == "Dolby Atmos" && audioFormat(tier: 1, rendering: 5) == "Dolby Atmos")
+        precondition(audioFormat(tier: 1, rendering: 1) == nil && audioFormat(tier: nil, rendering: nil) == nil)
+        let f = Scripting.field, r = Scripting.record
+        let listing = [
+            "1\(f)1\(f)true\(f)Inbox\(f)https://mail.example.com",
+            "1\(f)2\(f)false\(f)(2) Glass Harbour - YouTube\(f)https://www.youtube.com/watch?v=b",
+            "2\(f)1\(f)true\(f)YouTube Music\(f)https://music.youtube.com/watch?v=c",
+            "2\(f)2\(f)false\(f)Velvet Static • Oro Hills\(f)https://soundcloud.com/oro/velvet",
+            "garbage",
+        ].joined(separator: r) + r
+        let tabs = Browser.parse(listing)
+        precondition(tabs.count == 4 && tabs[1] == BrowserTab(window: 1, index: 2, active: false, title: "(2) Glass Harbour - YouTube", url: "https://www.youtube.com/watch?v=b"))
+        precondition(playingTab(tabs, title: "glass harbour")?.url == "https://www.youtube.com/watch?v=b")
+        precondition(playingTab(tabs, title: "Velvet Static")?.url == "https://soundcloud.com/oro/velvet")
+        precondition(playingTab(tabs, title: "Night Ferries")?.url == "https://music.youtube.com/watch?v=c")
+        precondition(playingTab(Array(tabs.prefix(1)), title: "Night Ferries") == nil)
     }
 }
 
@@ -380,6 +691,7 @@ final class SimulatedPlayer {
     private var rate = 1.0
     private var shuffle = false
     private var repeatMode = 0
+    private var liked = false
 
     private var track: Track { custom ?? Self.tracks[index] }
 
@@ -408,11 +720,12 @@ final class SimulatedPlayer {
     }
 
     func togglePlay() { freeze(); playing.toggle(); push() }
-    func skip(_ step: Int) { custom = nil; index = (index + step + Self.tracks.count) % Self.tracks.count; elapsed = 0; elapsedAt = Date(); playing = true; push() }
+    func skip(_ step: Int) { custom = nil; index = (index + step + Self.tracks.count) % Self.tracks.count; elapsed = 0; elapsedAt = Date(); playing = true; liked = false; push() }
     func seek(_ time: TimeInterval) { elapsed = max(0, min(track.duration, time)); elapsedAt = Date(); push() }
     func setRate(_ value: Double) { freeze(); rate = value; push() }
     func toggleShuffle() { shuffle.toggle(); push() }
     func cycleRepeat() { repeatMode = (repeatMode + 1) % 3; push() }
+    func setLiked(_ on: Bool) { liked = on; push() }
 
     private func push() {
         guard active else { return }
@@ -433,6 +746,9 @@ final class SimulatedPlayer {
         s.bundleID = "com.apple.Music"
         s.explicit = index == 1
         s.link = URL(string: "https://open.spotify.com/track/simulated\(index)")
+        s.canLike = true
+        s.liked = liked
+        s.audioFormat = ["Lossless", nil, "Dolby Atmos"][index]
         MediaController.shared.apply(s)
     }
 

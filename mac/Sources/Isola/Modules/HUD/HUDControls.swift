@@ -53,11 +53,20 @@ enum SystemAudio {
         let id = device
         var name: Unmanaged<CFString>?
         get(id, kAudioObjectPropertyName, scope: kAudioObjectPropertyScopeGlobal, &name)
+        var model: Unmanaged<CFString>?
+        get(id, kAudioDevicePropertyModelUID, scope: kAudioObjectPropertyScopeGlobal, &model)
         var transport = UInt32(0)
         get(id, kAudioDevicePropertyTransportType, scope: kAudioObjectPropertyScopeGlobal, &transport)
         var source = UInt32(0)
         let hasSource = get(id, kAudioDevicePropertyDataSource, &source)
-        return HUDOutput(name: name?.takeRetainedValue() as String? ?? "Speakers", transport: transport, dataSource: hasSource ? source : nil)
+        let deviceName = name?.takeRetainedValue() as String? ?? "Speakers"
+        // CoreAudio names a Bluetooth output after the device the Bluetooth monitor tracks.
+        let bluetooth = transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
+        let known = bluetooth ? DevicesState.shared.devices.first { $0.name == deviceName }?.symbol : nil
+        return HUDOutput(
+            name: deviceName, transport: transport, dataSource: hasSource ? source : nil,
+            deviceSymbol: known, model: model?.takeRetainedValue() as String?
+        )
     }
 
     // MARK: Listeners
@@ -148,6 +157,40 @@ enum DisplayBrightness {
         let adjustable = NSScreen.screens.filter { canChange($0.displayID) }
         let ordered = adjustable.sorted { $0.isBuiltIn && !$1.isBuiltIn }
         return alternate ? ordered.dropFirst().first ?? ordered.first : ordered.first
+    }
+}
+
+/// BetterDisplay's documented feed for third-party HUDs: with its Settings › Application ›
+/// Integration › "Dispatch OSD notifications" on, each brightness or volume change on a
+/// display it drives (DDC monitors included) is posted as a distributed notification whose
+/// object is this JSON. https://betterdisplay.pro/guide/integration/third-party-apps/
+struct BetterDisplayOSD: Decodable {
+    /// The current name; the legacy com.betterdisplay one repeats every event.
+    static let notification = Notification.Name("pro.betterdisplay.BetterDisplay.osd")
+
+    var displayID: Int?
+    var systemIconID: Int?  // 1 brightness, 3 volume, 4 mute
+    var controlTarget: String?  // combinedBrightness, hardwareBrightness, softwareBrightness, volume, mute, …
+    var value: Double?
+    var maxValue: Double?
+
+    /// The HUD it maps to; nil for what Isola has no HUD for (contrast, gamma, …) or a
+    /// level it can't place (no maximum).
+    @MainActor func snapshot() -> HUDSnapshot? {
+        let target = controlTarget ?? ""
+        let fraction = value.flatMap { v in maxValue.flatMap { $0 > 0 ? min(1, max(0, v / $0)) : nil } }
+        let screen = NSScreen.screens.first { Int($0.displayID) == displayID }
+        let name = screen.map { $0.isBuiltIn ? "Built-in Display" : $0.localizedName } ?? "Display"
+        if target.hasSuffix("Brightness") || (target.isEmpty && systemIconID == 1) {
+            return fraction.map { HUDSnapshot(kind: .brightness, level: $0, displayName: name) }
+        }
+        let muted = target == "mute" || (target.isEmpty && systemIconID == 4)
+        guard muted || target == "volume" || (target.isEmpty && systemIconID == 3), muted || fraction != nil else { return nil }
+        let level = fraction ?? 0
+        return HUDSnapshot(
+            kind: .volume, level: level, muted: muted, decibels: HUDOutput.approximateDecibels(level),
+            output: HUDOutput(name: name, transport: kAudioDeviceTransportTypeDisplayPort)
+        )
     }
 }
 

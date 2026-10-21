@@ -1,3 +1,4 @@
+import CoreBluetooth
 import SwiftUI
 
 /// System events in the island: charging and battery, Low Power Mode, Bluetooth
@@ -19,19 +20,25 @@ enum SystemModule {
         SettingsRegistry.add("live", title: "Live Activities", symbol: "bolt.badge.clock", order: 30) { SystemSettingsView() }
     }
 
-    /// Touching IOBluetooth triggers the Bluetooth permission prompt, so wait until
-    /// onboarding has explained it (and the user hasn't turned the feature off).
+    /// IOBluetooth blocks the main thread on the permission prompt while access is undecided,
+    /// so start only once onboarding is done AND Bluetooth access is already granted (reading
+    /// CBManager.authorization never prompts). The connect setting only gates announcements:
+    /// device low-battery warnings and the Lock Screen connectivity widget need the monitor too.
+    private static var bluetoothStarted = false
+
+    static func startBluetoothIfAllowed() {
+        guard !bluetoothStarted, UserDefaults.standard.bool(forKey: "onboarded"), CBManager.authorization == .allowedAlways else { return }
+        bluetoothStarted = true
+        BluetoothMonitor.shared.start()
+    }
+
     private static func startBluetoothWhenOnboarded() {
-        var started = false
-        let tryStart = {
-            guard !started, UserDefaults.standard.bool(forKey: "onboarded"),
-                  UserDefaults.standard.object(forKey: "system.bluetoothNotification") as? Bool ?? true else { return }
-            started = true
-            BluetoothMonitor.shared.start()
-        }
-        tryStart()
-        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { tryStart() }
+        startBluetoothIfAllowed()
+        // Onboarding answers the prompt (BluetoothPrompt); System Settings may grant it later.
+        for name in [UserDefaults.didChangeNotification, NSApplication.didBecomeActiveNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { startBluetoothIfAllowed() }
+            }
         }
     }
 
@@ -62,10 +69,12 @@ enum SystemModule {
         }
         Debug.on("system.bluetooth") { a in
             let name = a["name"] ?? "AirPods Pro"
-            var kind = BluetoothMonitor.classify(name: name)
+            // `product=0x2027`: recognise a renamed device by its Apple product ID.
+            let product = a["product"].flatMap { Int($0.lowercased().replacingOccurrences(of: "0x", with: ""), radix: 16) }
+            var kind = product.flatMap(BluetoothMonitor.model) ?? BluetoothMonitor.classify(name: name)
             if let symbol = a["kind"] {
                 kind.symbol = symbol
-                kind.earbuds = ["airpods", "airpodspro", "beats.earphones", "earbuds"].contains(symbol)
+                kind.earbuds = ["airpods", "airpods.gen3", "airpods.gen4", "airpods.pro", "airpodspro", "beats.earphones", "earbuds"].contains(symbol)
             }
             let device = ConnectedDevice(
                 id: "debug-\(name)", name: name, symbol: kind.symbol,
@@ -79,12 +88,20 @@ enum SystemModule {
                 Island.shared.post(BluetoothItems.connected(device, earbuds: kind.earbuds))
             }
         }
+        Debug.on("system.devicebattery") { a in
+            // A new level for a connected (or simulated) device, as the 10 s battery poll reads it.
+            let name = a["name"] ?? "AirPods Pro"
+            guard var device = DevicesState.shared.devices.first(where: { $0.name == name }) else { return }
+            device.battery = a["level"].flatMap(Double.init) ?? 0.15
+            BluetoothMonitor.shared.update(device)
+        }
         Debug.on("system.focus") { a in
             let name = a["name"] ?? "Work"
-            let known = FocusMonitor.known.values.first { $0.name == name }
+            // A known name keeps its mode id, so `name=Sleep` also plays the Sleep sound.
+            let known = FocusMonitor.known.first { $0.value.name == name }
             let mode = FocusMonitor.Mode(
-                id: "debug", name: name, symbol: a["symbol"] ?? known?.symbol ?? "moon.fill",
-                tint: known?.tint ?? .systemIndigo
+                id: known?.key ?? "debug", name: name, symbol: a["symbol"] ?? known?.value.symbol ?? "moon.fill",
+                tint: known?.value.tint ?? .systemIndigo
             )
             let monitor = FocusMonitor.shared
             monitor.pause(for: 30)
@@ -114,6 +131,7 @@ enum SystemModule {
             Gallery.island("system-charger-off-\(suffix)", item: PowerItems.charger(connected: false, level: 0.62), geometry: g)
             Gallery.island("system-charging-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72), geometry: g)
             Gallery.island("system-charging-peek-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72), peeking: true, geometry: g)
+            Gallery.island("system-charging-details-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72, watts: 96, details: true), peeking: true, geometry: g)
             Gallery.island("system-low-battery-\(suffix)", item: PowerItems.lowBattery(level: 0.18), geometry: g)
             Gallery.island("system-low-power-on-\(suffix)", item: PowerItems.lowPower(on: true), geometry: g)
             Gallery.island("system-low-power-off-\(suffix)", item: PowerItems.lowPower(on: false), geometry: g)
@@ -125,6 +143,7 @@ enum SystemModule {
             Gallery.island("system-focus-on-\(suffix)", item: FocusItems.changed(work, on: true), geometry: g)
             Gallery.island("system-focus-off-\(suffix)", item: FocusItems.changed(sleep, on: false), geometry: g)
             Gallery.island("system-focus-activity-\(suffix)", item: FocusItems.activity(work), geometry: g)
+            Gallery.island("system-focus-activity-peek-\(suffix)", item: FocusItems.activity(work), peeking: true, geometry: g)
             Gallery.island("system-lock-\(suffix)", item: LockMonitor.item(unlocked: false), geometry: g)
             Gallery.island("system-unlock-\(suffix)", item: LockMonitor.item(unlocked: true), geometry: g)
         }
@@ -137,16 +156,23 @@ enum SystemModule {
             .background(Color.black)
         }
         // Forms are AppKit-backed, which ImageRenderer can't draw: snapshot a real hosting view.
-        let settings = snapshot(SystemSettingsView(), size: CGSize(width: 520, height: 860))
-        Gallery.add("system-settings", size: CGSize(width: 520, height: 860)) { Image(nsImage: settings) }
+        let settings = snapshot(SystemSettingsView(), size: CGSize(width: 520, height: 1000))
+        Gallery.add("system-settings", size: CGSize(width: 520, height: 1000)) { Image(nsImage: settings) }
     }
 
     /// Parser/classifier checks; runs with `Isola --gallery` (asserts trip in debug builds).
     private static func selfCheck() {
-        let profiler = #"{"SPBluetoothDataType":[{"device_connected":[{"AirPods Pro":{"device_address":"AA-BB-CC-DD-EE-FF","device_batteryLevelLeft":"76%","device_batteryLevelRight":"80%","device_batteryLevelCase":"90 %"}}]}]}"#
-        let levels = BluetoothMonitor.profilerLevels(Data(profiler.utf8), address: "aa:bb:cc:dd:ee:ff")
-        assert(levels?.main == 0.76 && levels?.case == 0.9, "profiler battery parse")
-        assert(BluetoothMonitor.classify(name: "Ayman’s AirPods Pro") == ("airpodspro", true, true), "AirPods Pro")
+        let profiler = #"{"SPBluetoothDataType":[{"device_connected":[{"AirPods Pro":{"device_address":"AA-BB-CC-DD-EE-FF","device_batteryLevelLeft":"76%","device_batteryLevelRight":"80%","device_batteryLevelCase":"90 %","device_productID":"0x2014","device_vendorID":"0x004C"}}],"device_not_connected":[{"Kitchen":{"device_address":"11:22:33:44:55:66","device_productID":"0x2027","device_vendorID":"0x004C"}},{"Speaker":{"device_address":"22:22:33:44:55:66","device_productID":"0x2014","device_vendorID":"0x0A12"}}]}]}"#
+        let paired = BluetoothMonitor.profilerDevices(Data(profiler.utf8))
+        let pods = paired[BluetoothMonitor.key("aa-bb-cc-dd-ee-ff")]
+        precondition(pods?.main == 0.76 && pods?.case == 0.9 && pods?.productID == 0x2014, "profiler battery and product ID")
+        precondition(paired["11:22:33:44:55:66"]?.productID == 0x2027 && paired["11:22:33:44:55:66"]?.main == nil, "paired but not connected")
+        precondition(paired["22:22:33:44:55:66"] != nil && paired["22:22:33:44:55:66"]?.productID == nil, "product IDs only under Apple's vendor ID")
+        let pro = DeviceSymbol.first(["airpods.pro", "airpodspro"])
+        precondition(BluetoothMonitor.model(0x2027).map { $0.symbol == pro && $0.earbuds } == true, "renamed AirPods Pro 3 by product ID")
+        precondition(BluetoothMonitor.model(0x201F)?.earbuds == false && BluetoothMonitor.model(0x1234) == nil, "AirPods Max (USB-C); unknown IDs fall back")
+        precondition(BluetoothMonitor.models.values.allSatisfy { DeviceSymbol.first($0.symbols) != "headphones" }, "every model has a symbol on this macOS")
+        assert(BluetoothMonitor.classify(name: "Ayman’s AirPods Pro") == (pro, true, true), "AirPods Pro")
         assert(BluetoothMonitor.classify(name: "Beats Studio Pro") == ("beats.headphones", true, false), "Beats over-ear")
         assert(BluetoothMonitor.classify(name: "Kitchen HomePod").symbol == "homepod.fill", "HomePod")
         let dnd = #"{"data":[{"storeAssertionRecords":[{"assertionDetails":{"assertionDetailsModeIdentifier":"com.apple.focus.work"}}]}]}"#
@@ -155,6 +181,12 @@ enum SystemModule {
         let config = #"{"data":[{"modeConfigurations":{"x":{"mode":{"modeIdentifier":"com.apple.focus.work","name":"Deep Work","symbolImageName":"laptopcomputer"}}}}]}"#
         let configJSON = try? JSONSerialization.jsonObject(with: Data(config.utf8))
         assert(FocusMonitor.modeDictionary("com.apple.focus.work", in: configJSON as Any)?["name"] as? String == "Deep Work", "DND config")
+        for (language, sleep) in ["it": "Sonno", "de": "Schlafen", "fr": "Repos", "es": "Descanso", "en": "Sleep"] {
+            precondition(FocusL10n.text("Sleep", language: language) == sleep, "Focus name in \(language)")
+        }
+        precondition(FocusL10n.text("Deep Work", language: "it") == "Deep Work", "custom names stay as they are")
+        precondition(FocusL10n.language(for: ["it-IT", "en-US"]) == "it" && FocusL10n.language(for: ["nl-NL", "de-DE"]) == "de"
+            && FocusL10n.language(for: ["ja-JP"]) == "en", "Focus language pick")
         assert(PowerItems.symbol(for: 0.05) == "battery.0percent" && PowerItems.symbol(for: 0.5) == "battery.50percent", "battery symbol")
         assert(PowerItems.minutes(72) == "1h 12m" && PowerItems.minutes(9) == "9 min", "minutes")
         let r = PowerMonitor.read()

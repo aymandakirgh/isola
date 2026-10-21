@@ -18,9 +18,12 @@ final class Weather: NSObject, CLLocationManagerDelegate {
         refresh()
     }
 
-    private var locationAuthorized: Bool {
+    var locationAuthorized: Bool {
         [.authorizedAlways, .authorized].contains(location.authorizationStatus)
     }
+
+    /// The last fix while it's recent (weather refreshes take one every 30 min): where travel times start.
+    var lastLocation: CLLocation? { location.location.flatMap { $0.timestamp.timeIntervalSinceNow > -45 * 60 ? $0 : nil } }
 
     func refresh() {
         let prefs = CalendarPreferences.shared
@@ -54,7 +57,7 @@ final class Weather: NSObject, CLLocationManagerDelegate {
     }
 
     func fetch(latitude: Double, longitude: Double, place: String) async {
-        let url = URL(string: "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&current=temperature_2m,weather_code,precipitation,is_day&hourly=precipitation_probability&forecast_hours=6&timezone=auto")!
+        let url = URL(string: "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&current=temperature_2m,weather_code,precipitation,is_day&hourly=precipitation_probability,weather_code&forecast_hours=12&timezone=auto&timeformat=unixtime")!
         guard let (data, _) = try? await URLSession.shared.data(from: url),
               let forecast = try? JSONDecoder().decode(Forecast.self, from: data) else { return }
         let w = WeatherState.shared
@@ -62,11 +65,47 @@ final class Weather: NSObject, CLLocationManagerDelegate {
         w.temperature = forecast.current.temperature_2m
         w.symbol = code.symbol
         w.condition = code.text
-        // Chance of rain over the next few hours (the "precipitation details" line).
+        // Chance of rain over the next hours, and when and what the first rain is.
         let chances = (forecast.hourly?.precipitation_probability ?? []).compactMap { $0 }
         w.precipitationChance = chances.max().map { Double($0) / 100 }
+        w.precipitationDetail = Self.rainOutlook(forecast, now: Date())
         w.place = place
         w.available = true
+    }
+
+    /// The first wet hour ahead (a 30 % chance, or a wet code where the chance is missing):
+    /// "Rain at 18:00 · 60%", "Snow from 07:00 · 80%" for a run of wet hours, "Showers now · 40%".
+    /// nil when the forecast stays dry. Times are the forecast place's own.
+    private static func rainOutlook(_ f: Forecast, now: Date, locale: Locale = .autoupdatingCurrent) -> String? {
+        struct Hour { let start: Date; let code: Int?; let chance: Int? }
+        let times = f.hourly?.time ?? [], codes = f.hourly?.weather_code ?? [], chances = f.hourly?.precipitation_probability ?? []
+        let hours = times.indices.map { i in
+            Hour(start: Date(timeIntervalSince1970: TimeInterval(times[i])), code: i < codes.count ? codes[i] : nil, chance: i < chances.count ? chances[i] : nil)
+        }
+        .filter { $0.start.addingTimeInterval(3600) > now }
+        func wet(_ h: Hour) -> Bool { h.chance.map { $0 >= 30 } ?? (h.code.flatMap(WeatherCode.precipitation) != nil) }
+        guard let first = hours.firstIndex(where: wet) else { return nil }
+        let run = hours[first...].prefix(while: wet)
+        let kind = run.lazy.compactMap { $0.code.flatMap(WeatherCode.precipitation) }.first ?? "Rain"
+        let start = hours[first].start
+        let time = start.formatted(Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, timeZone: TimeZone(identifier: f.timezone ?? "") ?? .current))
+        let when = start <= now ? "now" : run.count > 1 ? "from \(time)" : "at \(time)"
+        return "\(kind) \(when)" + (run.compactMap(\.chance).max().map { " · \($0)%" } ?? "")
+    }
+
+    /// Runs with the gallery (`Isola --gallery`): the rain outlook from canned Open-Meteo JSON.
+    static func selfCheck() {
+        func outlook(_ chances: String, _ codes: String) -> String? {
+            // Hourly 14:00–21:00 in Rome (CEST), read at 14:30.
+            let json = #"{"timezone":"Europe/Rome","current":{"temperature_2m":21.4,"weather_code":2,"is_day":1},"hourly":{"time":[1792584000,1792587600,1792591200,1792594800,1792598400,1792602000,1792605600,1792609200],"precipitation_probability":\#(chances),"weather_code":\#(codes)}}"#
+            let forecast = try! JSONDecoder().decode(Forecast.self, from: Data(json.utf8))
+            return rainOutlook(forecast, now: Date(timeIntervalSince1970: 1_792_584_000 + 1800), locale: Locale(identifier: "en_GB"))
+        }
+        precondition(outlook("[0,10,20,0,60,0,0,0]", "[2,2,3,3,61,3,2,2]") == "Rain at 18:00 · 60%")
+        precondition(outlook("[0,0,0,40,80,70,0,0]", "[3,3,3,71,73,71,3,3]") == "Snow from 17:00 · 80%")
+        precondition(outlook("[50,20,0,0,0,0,0,0]", "[80,3,3,3,3,3,3,3]") == "Showers now · 50%")
+        precondition(outlook("[null,null,null,null,null,null,null,null]", "[2,2,95,2,2,2,2,2]") == "Thunderstorm at 16:00")
+        precondition(outlook("[0,10,20,10,0,0,0,0]", "[2,2,3,3,2,2,2,2]") == nil)
     }
 
     static func applyUnit() {
@@ -102,7 +141,13 @@ private struct Forecast: Decodable {
         let weather_code: Int
         let is_day: Int
     }
-    struct Hourly: Decodable { let precipitation_probability: [Int?]? }
+    /// Parallel arrays, one entry per hour from the current one (`time` in unix seconds).
+    struct Hourly: Decodable {
+        let time: [Int]?
+        let precipitation_probability: [Int?]?
+        let weather_code: [Int?]?
+    }
+    let timezone: String?
     let current: Current
     let hourly: Hourly?
 }
@@ -123,6 +168,18 @@ enum WeatherCode {
         case 80, 81, 82: (isDay ? "cloud.sun.rain.fill" : "cloud.moon.rain.fill", "Showers")
         case 95, 96, 99: ("cloud.bolt.rain.fill", "Thunderstorm")
         default: ("cloud.fill", "Cloudy")
+        }
+    }
+
+    /// What falls, for wet codes ("Snow from 07:00"); nil for dry ones.
+    static func precipitation(_ code: Int) -> String? {
+        switch code {
+        case 51...57: "Drizzle"
+        case 61...67: "Rain"
+        case 71...77, 85, 86: "Snow"
+        case 80...82: "Showers"
+        case 95...99: "Thunderstorm"
+        default: nil
         }
     }
 

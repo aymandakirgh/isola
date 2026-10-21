@@ -51,7 +51,8 @@ step expand on=0
 step media.pause;                       shot media-paused
 step media.resume
 
-step cal.event title="Design review" in=4; shot calendar-activity
+# A new event doesn't take the island from playing media (higher priority): cycle to it.
+step cal.event title="Design review" in=4; step cycle; shot calendar-activity
 step expand on=1;                       WAIT=1.2 shot calendar-expanded 300
 step expand on=0
 step cycle;                             shot cycled-activity

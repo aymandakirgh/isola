@@ -11,18 +11,26 @@ final class Island {
     private(set) var transient: IslandItem?
     private(set) var expanded = false
     private(set) var peeking = false
+    private(set) var peekCount = 0
     private(set) var hovering = false
     private(set) var pressed = false
     private(set) var activityIndex = 0
-    /// Hidden while a fullscreen app/game or Mission Control is up (see Fullscreen.swift).
-    var suppressed = false
+    /// Live activities swiped away, with the content key they had then (see `dismiss`).
+    private(set) var dismissed: [String: String] = [:]
+    /// Displays whose island is hidden for a fullscreen app/game or Mission Control (see Fullscreen.swift).
+    var suppressed: Set<CGDirectDisplayID> = []
 
     @ObservationIgnored private var transientTimer: Timer?
     @ObservationIgnored private var peekTimer: Timer?
     @ObservationIgnored private var hoverExpandTimer: Timer?
+    @ObservationIgnored private var restoreTimer: Timer?
+    /// Set when the user cycles while expanded: collapsing then returns to the most important activity.
+    @ObservationIgnored private var cycledWhileExpanded = false
 
+    /// Live activities in rotation, most important first; swiped-away ones sit out.
     var sortedActivities: [IslandItem] {
-        activities.sorted { $0.priority != $1.priority ? $0.priority > $1.priority : $0.startedAt < $1.startedAt }
+        activities.filter { dismissed[$0.id] == nil }
+            .sorted { $0.priority != $1.priority ? $0.priority > $1.priority : $0.startedAt < $1.startedAt }
     }
 
     var currentActivity: IslandItem? {
@@ -33,38 +41,60 @@ final class Island {
     /// What the island shows right now: a transient beats the live activity.
     var current: IslandItem? { transient ?? currentActivity }
 
+    /// Duo mode: the other live activity, shown in a bubble beside the island.
+    var secondary: IslandItem? { Preferences.shared.duo ? partner : nil }
+
+    /// The most important other activity; none while expanded or while a transient shows.
+    var partner: IslandItem? {
+        guard transient == nil, !expanded, let shown = currentActivity else { return nil }
+        return sortedActivities.first { $0.id != shown.id }
+    }
+
     var isIdle: Bool { current == nil && !expanded }
 
     // MARK: - Live activities
 
     func start(_ item: IslandItem) {
-        if let i = activities.firstIndex(where: { $0.id == item.id }) {
-            var updated = item
-            updated.startedAt = activities[i].startedAt
-            activities[i] = updated
-            return
-        }
+        if replace(item) { return }
         let shown = currentActivity
         withAnimation(Springs.expand) {
             activities.append(item)
-            // A new activity takes the island unless something more important is showing.
-            show(shown.map { $0.priority > item.priority } == true ? shown?.id : item.id)
+            announce(item, over: shown)
         }
+    }
+
+    /// Replace an activity's content without re-announcing it.
+    func update(_ item: IslandItem) {
+        if !replace(item) { start(item) }
+    }
+
+    /// New content for a running activity (it keeps its start time); false if it isn't running.
+    /// A swiped-away activity whose content changed comes back like a new one.
+    private func replace(_ item: IslandItem) -> Bool {
+        guard let i = activities.firstIndex(where: { $0.id == item.id }) else { return false }
+        var updated = item
+        updated.startedAt = activities[i].startedAt
+        activities[i] = updated
+        if let key = dismissed[item.id], key != item.contentKey ?? "" {
+            let shown = currentActivity
+            withAnimation(Springs.expand) {
+                dismissed[item.id] = nil
+                announce(item, over: shown)
+            }
+        }
+        return true
+    }
+
+    /// A new (or returning) activity takes the island unless something more important is showing.
+    private func announce(_ item: IslandItem, over shown: IslandItem?) {
+        show(shown.map { $0.priority > item.priority } == true ? shown?.id : item.id)
     }
 
     /// Point the island at an activity (nil: the most important one); an expanded island
     /// collapses if the newly shown item has nothing to expand into.
     private func show(_ id: String?) {
         activityIndex = id.flatMap { id in sortedActivities.firstIndex { $0.id == id } } ?? 0
-        if expanded, current?.expanded == nil { expanded = false }
-    }
-
-    /// Replace an activity's content without re-announcing it.
-    func update(_ item: IslandItem) {
-        guard let i = activities.firstIndex(where: { $0.id == item.id }) else { return start(item) }
-        var updated = item
-        updated.startedAt = activities[i].startedAt
-        activities[i] = updated
+        if expanded, current?.expanded == nil { expanded = false; cycledWhileExpanded = false }
     }
 
     func end(_ id: String) {
@@ -72,8 +102,21 @@ final class Island {
         let shown = currentActivity?.id
         withAnimation(Springs.collapseActivity) {
             activities.removeAll { $0.id == id }
+            dismissed[id] = nil
             show(shown == id ? nil : shown)
-            if activities.isEmpty, transient == nil { expanded = false; peeking = false }
+            if sortedActivities.isEmpty, transient == nil { expanded = false; peeking = false }
+        }
+    }
+
+    /// Swipe up on a compact live activity: it leaves the rotation until it starts or updates
+    /// with a different `contentKey` (e.g. the next track), or ends.
+    func dismiss(_ id: String) {
+        guard let item = activities.first(where: { $0.id == id }), dismissed[id] == nil else { return }
+        let shown = currentActivity?.id
+        withAnimation(Springs.collapseActivity) {
+            dismissed[id] = item.contentKey ?? ""
+            show(shown == id ? nil : shown)
+            if sortedActivities.isEmpty, transient == nil { expanded = false; peeking = false }
         }
     }
 
@@ -81,9 +124,17 @@ final class Island {
 
     /// Swipe down / middle click: show the next live activity.
     func cycle() {
-        guard activities.count > 1 else { return }
-        let next = sortedActivities[(activityIndex + 1) % activities.count].id
+        let list = sortedActivities
+        guard list.count > 1 else { return }
+        if expanded { cycledWhileExpanded = true }
+        let next = list[(activityIndex + 1) % list.count].id
         withAnimation(Springs.expand) { show(next) }
+    }
+
+    /// Duo mode: clicking the bubble swaps the two activities.
+    func swapDuo() {
+        guard let other = secondary else { return }
+        withAnimation(Springs.expand) { show(other.id) }
     }
 
     // MARK: - Transients (notifications and HUDs)
@@ -106,7 +157,7 @@ final class Island {
         guard transient != nil else { return }
         withAnimation(Springs.collapseNotification) {
             transient = nil
-            if activities.isEmpty { peeking = false }
+            if sortedActivities.isEmpty { peeking = false }
         }
         setPressed(false)
     }
@@ -116,7 +167,10 @@ final class Island {
     func quickPeek(_ on: Bool, for duration: TimeInterval? = nil) {
         peekTimer?.invalidate()
         guard on != peeking, !(on && current?.peek == nil) else { return }
-        withAnimation(on ? Springs.peekIn : Springs.peekOut) { peeking = on }
+        withAnimation(on ? Springs.peekIn : Springs.peekOut) {
+            peeking = on
+            if on { peekCount &+= 1 }
+        }
         if on, let duration {
             peekTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { _ in
                 MainActor.assumeIsolated { Island.shared.quickPeek(false) }
@@ -126,11 +180,28 @@ final class Island {
 
     func setExpanded(_ on: Bool) {
         hoverExpandTimer?.invalidate()
-        guard on != expanded, !(on && current?.expanded == nil) else { return }
+        guard on != expanded, !(on && !canExpand) else { return }
+        restoreTimer?.invalidate()
         withAnimation(on ? Springs.openPanel : Springs.collapseActivity) {
             expanded = on
             if on { peeking = false; hovering = false }
         }
+        if on { cycledWhileExpanded = false; return }
+        // Cycled while open: once collapsed, go back to the most important activity.
+        guard cycledWhileExpanded else { return }
+        cycledWhileExpanded = false
+        restoreTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.expanded else { return }
+                withAnimation(Springs.expand) { self.show(nil) }
+            }
+        }
+    }
+
+    /// Only items with a panel expand; with "Expand while inactive" off, idle ones (paused media) stay compact.
+    private var canExpand: Bool {
+        guard let item = current, item.expanded != nil else { return false }
+        return Preferences.shared.expandWhileInactive || item.inactive?() != true
     }
 
     func setHovering(_ on: Bool) {
@@ -170,7 +241,15 @@ final class Island {
         switch direction {
         case .down: expanded ? cycle() : setExpanded(true)
         case .up:
-            if expanded { setExpanded(false) } else if peeking { quickPeek(false) } else if transient != nil { dismissTransient() }
+            if expanded {
+                setExpanded(false)
+            } else if peeking {
+                quickPeek(false)
+            } else if transient != nil {
+                dismissTransient()
+            } else if let id = currentActivity?.id {
+                dismiss(id)
+            }
         case .left, .right: break
         }
     }
@@ -178,7 +257,7 @@ final class Island {
     // MARK: - Geometry
 
     var state: IslandState {
-        IslandState(item: current, expanded: expanded, peeking: peeking, hovering: hovering, pressed: pressed)
+        IslandState(item: current, secondary: secondary, expanded: expanded, peeking: peeking, hovering: hovering, pressed: pressed, peekCount: peekCount)
     }
 
     /// Island size on a given screen for the current state.
@@ -207,6 +286,34 @@ final class Island {
 
     /// Notchless displays with no simulated notch hide the idle pill entirely.
     func visible(in g: NotchGeometry) -> Bool {
-        !suppressed && !(isIdle && !g.hasNotch && !g.attached && !Preferences.shared.showIdlePill)
+        !suppressed.contains(g.displayID) && !(isIdle && !g.hasNotch && !g.attached && !Preferences.shared.showIdlePill)
+    }
+
+    // MARK: - Self-check (`Isola --gallery`)
+
+    /// Swipe-up dismissal, duo pairing and the restore after cycling, on a private instance.
+    static func selfCheck() {
+        let island = Island()
+        func item(_ id: String, _ priority: Int, key: String? = nil) -> IslandItem {
+            IslandItem(id: id, kind: .liveActivity, priority: priority) { EmptyView() } trailing: { EmptyView() }
+                .expanded { EmptyView() }
+                .contentKey(key)
+        }
+        island.start(item("music", 10, key: "song 1"))
+        island.start(item("timer", 5))
+        precondition(island.current?.id == "music" && island.partner?.id == "timer", "most important shows, the other pairs")
+        island.swipe(.up)
+        precondition(island.current?.id == "timer" && island.partner == nil, "swipe up dismisses the compact activity")
+        island.update(item("music", 10, key: "song 1"))
+        precondition(island.current?.id == "timer", "same content: still dismissed")
+        island.update(item("music", 10, key: "song 2"))
+        precondition(island.current?.id == "music", "new content: back, and it takes the island")
+        island.setExpanded(true)
+        island.cycle()
+        precondition(island.current?.id == "timer" && island.expanded, "cycling while expanded")
+        island.setExpanded(false)
+        precondition(island.current?.id == "timer", "the cycled item stays for a moment")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        precondition(island.current?.id == "music", "then the most important activity returns")
     }
 }

@@ -13,8 +13,12 @@ final class BluetoothMonitor: NSObject {
     private var disconnectNotes: [String: IOBluetoothUserNotification] = [:]
     /// Lowest warning level already announced per device.
     private var warned: [String: Double] = [:]
+    /// Apple product IDs of paired devices, by `key(_:)` address (from system_profiler).
+    private var productIDs: [String: Int] = [:]
+    private var profiling = false
     private var startedAt = Date.distantFuture
     private var timer: Timer?
+    private var ticks = 0
 
     func start() {
         startedAt = Date()
@@ -22,8 +26,11 @@ final class BluetoothMonitor: NSObject {
         for case let d as IOBluetoothDevice in IOBluetoothDevice.pairedDevices() ?? [] where d.isConnected() {
             track(d, announce: false)
         }
-        // Battery levels drift; refresh them now and then.
-        timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { _ in
+        // Every paired device's model, so renamed AirPods are recognised as they connect.
+        fetchProfiler()
+        // Battery levels drift: re-read them every 10 s while something is connected, so a
+        // device crossing the warning level is announced within seconds.
+        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
             MainActor.assumeIsolated { BluetoothMonitor.shared.refreshBatteries() }
         }
     }
@@ -41,16 +48,18 @@ final class BluetoothMonitor: NSObject {
     }
 
     private func track(_ d: IOBluetoothDevice, announce: Bool) {
-        let kind = Self.classify(d)
-        guard kind.audio || SystemPreferences.shared.bluetoothAllDevices else { return }
         let id = Self.id(of: d)
+        let productID = productIDs[Self.key(id)]
+        let kind = Self.classify(d, productID: productID)
+        guard kind.audio || SystemPreferences.shared.bluetoothAllDevices else { return }
         if disconnectNotes[id] == nil {
             disconnectNotes[id] = d.register(forDisconnectNotification: self, selector: #selector(disconnected(_:device:)))
         }
         let levels = Self.batteries(of: d)
         let device = ConnectedDevice(id: id, name: d.name ?? "Bluetooth device", symbol: kind.symbol, battery: levels.main, caseBattery: levels.case)
         connect(device, earbuds: kind.earbuds, announce: announce)
-        if levels.main == nil { fetchBatteriesFromProfiler(address: d.addressString) }
+        // Paired after launch, or levels IOBluetooth won't give: ask system_profiler.
+        if productID == nil || levels.main == nil { fetchProfiler() }
     }
 
     /// Shared by real events and `system.bluetooth` debug simulations.
@@ -82,26 +91,36 @@ final class BluetoothMonitor: NSObject {
             let delay = Island.shared.transient?.id == "system.bluetooth" ? Preferences.shared.notificationDuration : 0
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 Island.shared.post(BluetoothItems.lowBattery(device), duration: 5)
-                if prefs.deviceLowBatterySound { Sounds.play("Funk") }
+                if prefs.deviceLowBatterySound { Sounds.lowBattery() }
             }
             break
         }
     }
 
     private func refreshBatteries() {
+        guard !DevicesState.shared.devices.isEmpty else { return }
+        ticks += 1
+        var unreported = false
         for case let d as IOBluetoothDevice in IOBluetoothDevice.pairedDevices() ?? [] where d.isConnected() {
             let id = Self.id(of: d)
             guard var device = DevicesState.shared.devices.first(where: { $0.id == id }) else { continue }
             let levels = Self.batteries(of: d)
-            guard let main = levels.main else { continue }
+            guard let main = levels.main else {
+                if device.battery != nil { unreported = true }
+                continue
+            }
             device.battery = main
             device.caseBattery = levels.case
             update(device)
         }
+        // Levels only system_profiler reports: refreshed once a minute (a 0.2 s run).
+        if unreported, ticks % 6 == 0 { fetchProfiler() }
     }
 
-    private func update(_ device: ConnectedDevice) {
-        guard let i = DevicesState.shared.devices.firstIndex(where: { $0.id == device.id }) else { return }
+    /// A fresh reading for a tracked device (also `system.devicebattery`).
+    func update(_ device: ConnectedDevice) {
+        guard let i = DevicesState.shared.devices.firstIndex(where: { $0.id == device.id }),
+              DevicesState.shared.devices[i] != device else { return }
         DevicesState.shared.devices[i] = device
         checkBattery(device, announce: true)
     }
@@ -110,8 +129,13 @@ final class BluetoothMonitor: NSObject {
 
     nonisolated private static func id(of d: IOBluetoothDevice) -> String { d.addressString ?? d.name ?? "device" }
 
-    /// SF Symbol plus whether it is an audio device and in-ear (gets the earbuds clip).
-    nonisolated static func classify(_ d: IOBluetoothDevice) -> (symbol: String, audio: Bool, earbuds: Bool) {
+    /// IOBluetooth says "aa-bb-…", system_profiler "AA:BB:…".
+    nonisolated static func key(_ address: String) -> String { address.uppercased().replacingOccurrences(of: "-", with: ":") }
+
+    /// SF Symbol plus whether it is an audio device and in-ear (gets the earbuds clip): by
+    /// Apple product ID first (renamed AirPods too), then by name, then by Bluetooth class.
+    nonisolated static func classify(_ d: IOBluetoothDevice, productID: Int?) -> (symbol: String, audio: Bool, earbuds: Bool) {
+        if let model = productID.flatMap(model) { return model }
         let fromName = classify(name: d.name ?? "")
         if fromName.audio { return fromName }
         switch (d.deviceClassMajor, d.deviceClassMinor) {
@@ -124,19 +148,66 @@ final class BluetoothMonitor: NSObject {
         }
     }
 
+    /// Also what the HUD falls back to for an output device's name.
     nonisolated static func classify(name raw: String) -> (symbol: String, audio: Bool, earbuds: Bool) {
         let name = raw.lowercased()
-        if name.contains("airpods max") { return ("airpodsmax", true, false) }
-        if name.contains("airpods pro") { return ("airpodspro", true, true) }
+        if name.contains("airpods max") { return (DeviceSymbol.first(["airpods.max", "airpodsmax"]), true, false) }
+        if name.contains("airpods pro") { return (DeviceSymbol.first(["airpods.pro", "airpodspro"]), true, true) }
         if name.contains("airpods") { return ("airpods", true, true) }
         if name.contains("beats") {
             let overEar = name.contains("studio") || name.contains("solo")
             return (overEar ? "beats.headphones" : "beats.earphones", true, !overEar)
         }
-        if name.contains("homepod") { return ("homepod.fill", true, false) }
-        if name.contains("earpods") || name.contains("buds") { return ("earbuds", true, true) }
+        if name.contains("homepod") { return (name.contains("mini") ? "homepod.mini.fill" : "homepod.fill", true, false) }
+        if name.contains("earpods") { return ("earpods", true, true) }
+        if name.contains("buds") { return ("earbuds", true, true) }
         return ("headphones", false, false)
     }
+
+    nonisolated static func model(_ productID: Int) -> (symbol: String, audio: Bool, earbuds: Bool)? {
+        models[productID].map { (DeviceSymbol.first($0.symbols), true, $0.earbuds) }
+    }
+
+    /// Apple Bluetooth product IDs (vendor 0x004C): SF Symbols to try, newest first, and
+    /// whether the model sits in the ear. IDs from AppleDB (github.com/littlebyteorg/appledb,
+    /// deviceFiles/AirPods and deviceFiles/Beats, "Device1,<decimal ID>"); they match
+    /// system_profiler's device_productID and the <decimal ID>.data files in macOS's
+    /// HeadphoneManager.framework.
+    nonisolated static let models: [Int: (symbols: [String], earbuds: Bool)] = [
+        0x2002: (["airpods"], true),  // AirPods
+        0x200F: (["airpods"], true),  // AirPods (2nd generation)
+        0x2013: (["airpods.gen3", "airpods"], true),  // AirPods (3rd generation)
+        0x2019: (["airpods.gen4", "airpods.gen3", "airpods"], true),  // AirPods 4
+        0x201B: (["airpods.gen4", "airpods.gen3", "airpods"], true),  // AirPods 4 with ANC
+        0x2030: (["airpods.gen4", "airpods.gen3", "airpods"], true),  // AirPods 5 (wireless case)
+        0x2036: (["airpods.gen4", "airpods.gen3", "airpods"], true),  // AirPods 5
+        0x200E: (["airpods.pro", "airpodspro"], true),  // AirPods Pro
+        0x2014: (["airpods.pro", "airpodspro"], true),  // AirPods Pro 2 (Lightning)
+        0x2024: (["airpods.pro", "airpodspro"], true),  // AirPods Pro 2 (USB-C)
+        0x2027: (["airpods.pro", "airpodspro"], true),  // AirPods Pro 3
+        0x2028: (["airpods.pro", "airpodspro"], true),  // AirPods Pro 3
+        0x200A: (["airpods.max", "airpodsmax"], false),  // AirPods Max (Lightning)
+        0x201F: (["airpods.max", "airpodsmax"], false),  // AirPods Max (USB-C)
+        0x202D: (["airpods.max", "airpodsmax"], false),  // AirPods Max 2
+        0x2003: (["beats.powerbeats3", "beats.earphones"], true),  // Powerbeats3
+        0x2005: (["beats.earphones"], true),  // BeatsX
+        0x2006: (["beats.headphones"], false),  // Beats Solo3
+        0x2007: (["beats.headphones"], false),  // Beats Studio3
+        0x2009: (["beats.headphones"], false),  // Beats Studio3
+        0x200B: (["beats.powerbeats.pro", "beats.earphones"], true),  // Powerbeats Pro
+        0x200C: (["beats.headphones"], false),  // Beats Solo Pro
+        0x200D: (["beats.powerbeats", "beats.earphones"], true),  // Powerbeats (4th generation)
+        0x2010: (["beats.earphones"], true),  // Beats Flex
+        0x2011: (["beats.studiobuds", "beats.earphones"], true),  // Beats Studio Buds
+        0x2012: (["beats.fitpro", "beats.earphones"], true),  // Beats Fit Pro
+        0x2016: (["beats.studiobuds", "beats.earphones"], true),  // Beats Studio Buds +
+        0x2017: (["beats.headphones"], false),  // Beats Studio Pro
+        0x201A: (["beats.pill", "hifispeaker.fill"], false),  // Beats Pill
+        0x201D: (["beats.powerbeats.pro.2", "beats.powerbeats.pro", "beats.earphones"], true),  // Powerbeats Pro 2
+        0x2025: (["beats.headphones"], false),  // Beats Solo 4
+        0x2026: (["beats.solobuds", "beats.earphones"], true),  // Beats Solo Buds
+        0x202F: (["beats.fitpro", "beats.earphones"], true),  // Powerbeats Fit
+    ]
 
     /// Best effort: Apple accessories expose battery percentages on IOBluetoothDevice (private keys).
     nonisolated static func batteries(of d: IOBluetoothDevice) -> (main: Double?, case: Double?) {
@@ -149,9 +220,11 @@ final class BluetoothMonitor: NSObject {
         return (single ?? buds.min(), read("batteryPercentCase"))
     }
 
-    /// Fallback for accessories IOBluetooth won't report: ask system_profiler once, off the main thread.
-    private func fetchBatteriesFromProfiler(address: String?) {
-        guard let address else { return }
+    /// system_profiler knows every paired device's product ID, and the battery levels some
+    /// accessories don't give IOBluetooth: one run at a time, off the main thread.
+    private func fetchProfiler() {
+        guard !profiling else { return }
+        profiling = true
         DispatchQueue.global(qos: .utility).async {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
@@ -159,39 +232,54 @@ final class BluetoothMonitor: NSObject {
             let pipe = Pipe()
             p.standardOutput = pipe
             p.standardError = FileHandle.nullDevice
-            guard (try? p.run()) != nil else { return }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            p.waitUntilExit()
-            guard let levels = Self.profilerLevels(data, address: address) else { return }
+            var data = Data()
+            if (try? p.run()) != nil {
+                data = pipe.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+            }
+            let entries = Self.profilerDevices(data)
             DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    let monitor = BluetoothMonitor.shared
-                    guard var device = DevicesState.shared.devices.first(where: { $0.id == address }) else { return }
-                    device.battery = levels.main
-                    device.caseBattery = levels.case
-                    monitor.update(device)
-                }
+                MainActor.assumeIsolated { BluetoothMonitor.shared.received(entries) }
             }
         }
     }
 
-    /// Parses `system_profiler SPBluetoothDataType -json` for one device's battery levels.
-    nonisolated static func profilerLevels(_ data: Data, address: String) -> (main: Double, case: Double?)? {
+    private func received(_ entries: [String: ProfilerEntry]) {
+        profiling = false
+        for (key, entry) in entries { if let id = entry.productID { productIDs[key] = id } }
+        for var device in DevicesState.shared.devices {
+            guard let entry = entries[Self.key(device.id)] else { continue }
+            if let model = entry.productID.flatMap(Self.model) { device.symbol = model.symbol }
+            if let main = entry.main {
+                device.battery = main
+                device.caseBattery = entry.case
+            }
+            update(device)
+        }
+    }
+
+    typealias ProfilerEntry = (productID: Int?, main: Double?, case: Double?)
+
+    /// Parses `system_profiler SPBluetoothDataType -json`, connected and paired devices, by
+    /// `key(_:)` address: the product ID (Apple's vendor ID only) and battery levels.
+    nonisolated static func profilerDevices(_ data: Data) -> [String: ProfilerEntry] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let sections = root["SPBluetoothDataType"] as? [[String: Any]] else { return nil }
-        let normalized = address.uppercased().replacingOccurrences(of: "-", with: ":")
+              let sections = root["SPBluetoothDataType"] as? [[String: Any]] else { return [:] }
+        var result: [String: ProfilerEntry] = [:]
         for section in sections {
-            for entry in section["device_connected"] as? [[String: Any]] ?? [] {
-                for case let info as [String: Any] in entry.values {
-                    guard (info["device_address"] as? String)?.uppercased().replacingOccurrences(of: "-", with: ":") == normalized else { continue }
-                    func pct(_ k: String) -> Double? { (info[k] as? String).flatMap { Double($0.trimmingCharacters(in: CharacterSet(charactersIn: "% "))) }.map { $0 / 100 } }
-                    let main = pct("device_batteryLevelMain") ?? [pct("device_batteryLevelLeft"), pct("device_batteryLevelRight")].compactMap { $0 }.min()
-                    guard let main else { return nil }
-                    return (main, pct("device_batteryLevelCase"))
+            for list in ["device_connected", "device_not_connected"] {
+                for entry in section[list] as? [[String: Any]] ?? [] {
+                    for case let info as [String: Any] in entry.values {
+                        guard let address = info["device_address"] as? String else { continue }
+                        func hex(_ k: String) -> Int? { (info[k] as? String).flatMap { Int($0.lowercased().replacingOccurrences(of: "0x", with: ""), radix: 16) } }
+                        func pct(_ k: String) -> Double? { (info[k] as? String).flatMap { Double($0.trimmingCharacters(in: CharacterSet(charactersIn: "% "))) }.map { $0 / 100 } }
+                        let main = pct("device_batteryLevelMain") ?? [pct("device_batteryLevelLeft"), pct("device_batteryLevelRight")].compactMap { $0 }.min()
+                        result[key(address)] = (hex("device_vendorID") == 0x004C ? hex("device_productID") : nil, main, pct("device_batteryLevelCase"))
+                    }
                 }
             }
         }
-        return nil
+        return result
     }
 }
 
@@ -245,6 +333,11 @@ enum DeviceSymbol {
     /// Falls back when a symbol name doesn't exist on this macOS.
     static func resolve(_ name: String, fallback: String = "headphones") -> String {
         NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil ? name : fallback
+    }
+
+    /// The first of `names` this macOS has (newer models' symbols are missing on older systems).
+    static func first(_ names: [String]) -> String {
+        names.first { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil } ?? "headphones"
     }
 }
 

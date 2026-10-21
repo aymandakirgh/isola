@@ -12,17 +12,20 @@ enum CalendarItems {
     static let idleID = "calendar.idle"
     static let panelSize = CGSize(width: 400, height: 200)
 
-    static func event(_ e: CalendarEvent) -> IslandItem { event(e, panel: LiveCalendarPanel()) }
+    static func event(_ e: CalendarEvent) -> IslandItem {
+        event(e, panel: LiveCalendarPanel(), colors: CalendarPreferences.shared.calendarColors)
+    }
 
     /// Upcoming event: colour dot + calendar glyph, countdown; the title peeks on hover.
-    static func event<P: View>(_ e: CalendarEvent, panel: P) -> IslandItem {
+    static func event<P: View>(_ e: CalendarEvent, panel: P, colors: Bool = true) -> IslandItem {
         IslandItem(id: eventID, kind: .liveActivity, priority: 2) {
-            EventLeading(color: e.calendarColor)
+            EventLeading(color: e.tint(colors))
         } trailing: {
             CountdownText(to: e.start).padding(.trailing, 11)
         }
-        .peek(onHover: true) { EventPeek(event: e) }
+        .peek(onHover: true) { EventPeek(event: e, tint: e.tint(colors)) }
         .expanded(size: panelSize) { panel }
+        .onOptionTap { CalendarSource.shared.open(e) }
         .onSwipe { direction in
             // Swipe up dismisses this event (restore it from the expanded calendar).
             guard direction == .up, !Island.shared.expanded else { return false }
@@ -31,13 +34,16 @@ enum CalendarItems {
         }
     }
 
-    static func leave(_ e: CalendarEvent, now: Date) -> IslandItem {
-        IslandItem(id: leaveID, kind: .notification) {
-            Image(systemName: "car.fill").islandSymbol(15).foregroundStyle(Palette.amber).padding(.leading, 11)
+    /// `travel` is the Apple Maps estimate, when there is one ("25m by car" in the peek).
+    static func leave(_ e: CalendarEvent, now: Date, travel: TimeInterval? = nil) -> IslandItem {
+        let mode = CalendarPreferences.shared.travelMode
+        let trip = travel.map { "\(CalendarText.countdown(to: now.addingTimeInterval(max($0, 60)), from: now)) \(mode.phrase)" }
+        return IslandItem(id: leaveID, kind: .notification) {
+            Image(systemName: mode.symbol).islandSymbol(15).foregroundStyle(Palette.amber).padding(.leading, 11)
         } trailing: {
             CountdownText(to: e.start).padding(.trailing, 11)
         }
-        .peek(always: true) { LeavePeek(event: e) }
+        .peek(always: true) { LeavePeek(event: e, trip: trip) }
         .expanded(size: panelSize) { LiveCalendarPanel() }
     }
 
@@ -49,6 +55,7 @@ enum CalendarItems {
             TimerCountdown(snapshot: snapshot).padding(.trailing, 9)
         }
         .expanded(size: panelSize) { LiveCalendarPanel() }
+        .onOptionTap { CalendarTimer.shared.togglePause() }
     }
 
     static func timerDone() -> IslandItem {
@@ -74,11 +81,18 @@ enum CalendarItems {
 
 // MARK: - Wings
 
+extension CalendarEvent {
+    /// The calendar's colour, or `neutral` with "Use calendar colours" off.
+    func tint(_ colors: Bool, neutral: Color = Palette.muted) -> Color {
+        colors ? Color(nsColor: calendarColor) : neutral
+    }
+}
+
 private struct EventLeading: View {
-    var color: NSColor
+    var color: Color
     var body: some View {
         HStack(spacing: 4) {
-            Circle().fill(Color(nsColor: color)).frame(width: 7, height: 7)
+            Circle().fill(color).frame(width: 7, height: 7)
             Image(systemName: "calendar").islandSymbol(14)
         }
         .padding(.leading, 10)
@@ -99,10 +113,11 @@ private struct CountdownText: View {
 
 private struct EventPeek: View {
     var event: CalendarEvent
+    var tint: Color
     var body: some View {
         Marquee {
             HStack(spacing: 4) {
-                Circle().fill(Color(nsColor: event.calendarColor)).frame(width: 6, height: 6)
+                Circle().fill(tint).frame(width: 6, height: 6)
                 Text(event.title).foregroundStyle(Palette.ink)
                 Text("· \(CalendarText.time(event.start))\(event.location.map { " · \($0)" } ?? "")")
             }
@@ -116,10 +131,12 @@ private struct EventPeek: View {
 
 private struct LeavePeek: View {
     var event: CalendarEvent
+    var trip: String?
     var body: some View {
         Marquee {
             HStack(spacing: 4) {
                 Text("Time to leave").foregroundStyle(Palette.amber)
+                if let trip { Text("· \(trip)").foregroundStyle(Palette.amber) }
                 Text("· \(event.title)").foregroundStyle(Palette.ink)
                 if let location = event.location { Text("· \(location)") }
             }
@@ -135,9 +152,9 @@ private struct TimerRing: View {
     var snapshot: TimerSnapshot?
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let progress = (snapshot ?? CalendarTimer.shared.snapshot)?.progress(at: context.date) ?? 0
-            BatteryRing(level: progress, color: Palette.amber, size: 21, lineWidth: 2.5)
-                .overlay(Image(systemName: "timer").font(.system(size: 8, weight: .bold)).foregroundStyle(Palette.amber))
+            let timer = snapshot ?? CalendarTimer.shared.snapshot
+            BatteryRing(level: timer?.progress(at: context.date) ?? 0, color: Palette.amber, size: 21, lineWidth: 2.5)
+                .overlay(Image(systemName: timer?.paused == nil ? "timer" : "pause.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(Palette.amber))
         }
     }
 }
@@ -146,10 +163,10 @@ private struct TimerCountdown: View {
     var snapshot: TimerSnapshot?
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let remaining = (snapshot ?? CalendarTimer.shared.snapshot)?.remaining(at: context.date) ?? 0
-            Text(CalendarText.clock(remaining))
+            let timer = snapshot ?? CalendarTimer.shared.snapshot
+            Text(CalendarText.clock(timer?.remaining(at: context.date) ?? 0))
                 .font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                .foregroundStyle(Palette.amber).lineLimit(1).fixedSize()
+                .foregroundStyle(timer?.paused == nil ? Palette.amber : Palette.muted).lineLimit(1).fixedSize()
         }
     }
 }
@@ -190,7 +207,7 @@ struct WeatherSnapshot {
         temperature = w.displayTemperature
         symbol = w.symbol
         condition = w.condition
-        detail = w.precipitationChance.map { $0 >= 0.3 ? "Rain likely · \(Int(($0 * 100).rounded()))%" : "No rain expected" }
+        detail = w.precipitationDetail ?? w.precipitationChance.map { _ in "No rain expected" }
     }
 
     init(temperature: String, symbol: String, condition: String, detail: String?) {
@@ -273,12 +290,12 @@ struct CalendarPanel: View {
         let upcoming = events.filter { (!splitAllDay || !$0.isAllDay) && $0.end > now }
         if upcoming.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                if !allDay.isEmpty { AllDayChips(events: allDay, colors: colors) }
+                if !allDay.isEmpty { AllDayChips(events: allDay, now: now, colors: colors) }
                 EmptyDay(weather: weatherOnEmptyDay ? weather : nil)
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                if !allDay.isEmpty { AllDayChips(events: allDay, colors: colors) }
+                if !allDay.isEmpty { AllDayChips(events: allDay, now: now, colors: colors) }
                 ForEach(upcoming.prefix(allDay.isEmpty ? 2 : 1)) { EventRow(event: $0, now: now, colors: colors) }
             }
         }
@@ -293,6 +310,7 @@ struct CalendarPanel: View {
                         .font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(Palette.amber)
                 }
                 Spacer()
+                PanelButton(title: timer.paused == nil ? "Pause" : "Resume") { CalendarTimer.shared.togglePause() }
                 PanelButton(title: "Stop") { CalendarTimer.shared.stop() }
             } else {
                 Text("Timer").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
@@ -362,13 +380,15 @@ private struct DayCell: View {
 
 private struct AllDayChips: View {
     var events: [CalendarEvent]
+    var now: Date
     var colors: Bool
     var body: some View {
         HStack(spacing: 6) {
             ForEach(events.prefix(2)) { e in
                 HStack(spacing: 4) {
-                    Circle().fill(colors ? Color(nsColor: e.calendarColor) : Palette.muted).frame(width: 5, height: 5)
+                    Circle().fill(e.tint(colors)).frame(width: 5, height: 5)
                     Text(e.title).lineLimit(1)
+                    if let span = CalendarText.span(e, on: now) { Text(span).foregroundStyle(Palette.muted).fixedSize() }
                 }
                 .font(.system(size: 10.5, weight: .semibold))
                 .padding(.horizontal, 7).padding(.vertical, 2.5)
@@ -387,10 +407,11 @@ private struct EventRow: View {
     var body: some View {
         let started = event.start <= now
         HStack(spacing: 8) {
-            RoundedRectangle(cornerRadius: 1.5).fill(colors ? Color(nsColor: event.calendarColor) : Palette.muted).frame(width: 3, height: 27)
+            RoundedRectangle(cornerRadius: 1.5).fill(event.tint(colors)).frame(width: 3, height: 27)
             VStack(alignment: .leading, spacing: 1) {
                 Text(event.title).font(.system(size: 12.5, weight: .semibold)).lineLimit(1)
-                Text(CalendarText.range(event.start, event.end) + (event.location.map { " · \($0)" } ?? ""))
+                let when = CalendarText.span(event, on: now) ?? (event.isAllDay ? "All day" : CalendarText.range(event.start, event.end))
+                Text(when + (event.location.map { " · \($0)" } ?? ""))
                     .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Palette.muted).lineLimit(1)
             }
             Spacer(minLength: 6)
@@ -454,15 +475,29 @@ struct CalendarSettingsView: View {
                     }
                 }
             }
-            Section("Upcoming events") {
+            Section {
                 Toggle("Show upcoming events in the island", isOn: $prefs.liveActivity)
                 Stepper("Appear \(prefs.leadMinutes) minutes before they start", value: $prefs.leadMinutes, in: 1...60)
-                Toggle("Time to leave alerts for events with a location", isOn: $prefs.timeToLeave)
-                Stepper("Alert \(prefs.leaveMinutes) minutes before", value: $prefs.leaveMinutes, in: 5...90, step: 5)
-                    .disabled(!prefs.timeToLeave)
                 Toggle("Show the date when nothing else is running", isOn: $prefs.idleActivity)
+                Toggle("Time to leave alerts for events with a location", isOn: $prefs.timeToLeave)
+                Group {
+                    Picker("Travel by", selection: $prefs.travelMode) {
+                        ForEach(TravelMode.allCases) { Text($0.title).tag($0) }
+                    }
+                    Stepper("Add \(prefs.leaveBuffer) minutes to the travel time", value: $prefs.leaveBuffer, in: 0...30, step: 5)
+                    Stepper("Without a travel time, alert \(prefs.leaveMinutes) minutes before", value: $prefs.leaveMinutes, in: 5...90, step: 5)
+                }
+                .disabled(!prefs.timeToLeave)
+            } header: {
+                Text("Upcoming events")
+            } footer: {
+                // Never asks for location itself: the weather's "Use Current Location" does.
+                Text(Weather.shared.locationAuthorized
+                    ? "Time to leave uses the Apple Maps travel time from your current location."
+                    : "Time to leave uses travel time once Isola has your location (Weather › Use Current Location); until then it alerts a fixed time before.")
+                    .foregroundStyle(.secondary)
             }
-            Section("Expanded calendar") {
+            Section("Display") {
                 Toggle("Show declined events", isOn: $prefs.showDeclined)
                 Toggle("Hide subscribed calendars", isOn: $prefs.excludeSubscribed)
                 Toggle("Use calendar colours", isOn: $prefs.calendarColors)
@@ -541,6 +576,16 @@ enum CalendarText {
     static func month(_ date: Date) -> String { date.formatted(.dateTime.month(.wide)) }
     static func dayNumber(_ date: Date) -> String { String(Calendar.current.component(.day, from: date)) }
     static func weekdayInitial(_ date: Date) -> String { date.formatted(.dateTime.weekday(.narrow)) }
+
+    /// Multi-day events: "Day 1 of 3 · from 22:00", "Day 2 of 3", "Day 3 of 3 · until 07:10".
+    /// nil for an event that starts and ends on the same day.
+    static func span(_ e: CalendarEvent, on date: Date) -> String? {
+        let days = e.days()
+        guard days.count > 1, let i = days.firstIndex(of: Calendar.current.startOfDay(for: date)) else { return nil }
+        let label = "Day \(i + 1) of \(days.count)"
+        if e.isAllDay { return label }
+        return i == 0 ? "\(label) · from \(time(e.start))" : i == days.count - 1 ? "\(label) · until \(time(e.end))" : label
+    }
 
     // Chinese lunisolar calendar ("lunar year support").
     private static let chinese = Calendar(identifier: .chinese)
