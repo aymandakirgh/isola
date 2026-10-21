@@ -1,26 +1,50 @@
 // The licence server's routes, offline: the function's handler called directly with an in-memory
 // store and no mail. Run with `npm run test:api` (Node's own test runner, no Vercel credentials).
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { createHash, createHmac } from "node:crypto";
+import { test, type TestContext } from "node:test";
 
-// Whatever this shell's environment holds, never reach a real Blob store or Resend.
+// Whatever this shell's environment holds, never reach a real Blob store or Resend, and use the
+// built-in development secret.
 for (const name of [
   "BLOB_READ_WRITE_TOKEN",
   "BLOB_STORE_ID",
   "RESEND_API_KEY",
   "RESEND_FROM",
   "VERCEL_ENV",
+  "LICENSE_SECRET",
 ])
   delete process.env[name];
-const { default: api, isValidKey } = await import("../../api/license.ts");
+const {
+  default: api,
+  isValidKey,
+  memory,
+  withKey,
+  blobCall,
+} = await import("../../api/license.ts");
 
-type Listed = { devices: { id: string; activated: string }[] };
-type Reply = Listed & { key: string; email: string | null; error: string };
+type Listed = { devices: { id: string; name: string; activated: string }[] };
+type Reply = Listed & {
+  key: string;
+  email: string | null;
+  error: string;
+  mail: boolean;
+};
 const ids = (body: Listed) => body.devices.map((d) => d.id);
-const mac = (id: string) => ({ id, name: `Mac ${id}`, model: "Mac16,1" });
+/** A Mac whose id (its credential) is distinctive enough to spot anywhere in a reply. */
+const mac = (name: string) => ({
+  id: `${name}-device-id`,
+  name: `Mac ${name}`,
+  model: "Mac16,1",
+});
+const HANDLE = /^[A-Za-z0-9_-]{22}$/;
+const sha256 = (value: string) =>
+  createHash("sha256").update(value).digest("hex");
+const hmac = (secret: string, value: string) =>
+  createHmac("sha256", secret).update(value).digest();
 
 let address = 0;
-/** POST /api/license/<action>, from a new network address unless `from` is given (demo keys are capped per address). */
+/** POST /api/license/<action>, from a new network address unless `from` is given (most routes cap per address). */
 async function call(
   action: string,
   body: unknown,
@@ -46,6 +70,40 @@ async function mint(email?: string): Promise<string> {
   return body.key;
 }
 
+async function activateAll(key: string, names: string[]) {
+  for (const name of names)
+    assert.equal(
+      (await call("activate", { key, device: mac(name) })).status,
+      200,
+    );
+}
+
+/** Every stored object's ETag: what changes is what was written. */
+const versions = () =>
+  new Map([...memory].map(([path, { etag }]) => [path, etag]));
+
+/** Resend configured for this test, with fetch stubbed so nothing leaves the process. */
+function mailbox(t: TestContext) {
+  const sent: { url: string; init?: RequestInit }[] = [];
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (url: string | URL | Request, init?: RequestInit) => {
+      sent.push({ url: String(url), init });
+      return Response.json({ id: "stub" });
+    },
+  );
+  process.env.RESEND_API_KEY = "re_test";
+  process.env.RESEND_FROM = "Isola <licenses@example.com>";
+  t.after(() => {
+    delete process.env.RESEND_API_KEY;
+    delete process.env.RESEND_FROM;
+  });
+  return sent;
+}
+/** The mail goes out after the reply. */
+const delivered = () => new Promise((resolve) => setTimeout(resolve, 50));
+
 test("keys check out exactly as in the Mac app", () => {
   // License.makeKey(seed: 7) and License.makeKey(seed: 42), printed by the Swift code.
   assert.ok(isValidKey("ISOLA-W7UD-A389-NXLG"));
@@ -69,39 +127,37 @@ test("demo mints a new key in the app's format", async () => {
   assert.notEqual(without.body.key, withEmail.body.key);
 });
 
-test("activate registers a Mac, and activating it again changes nothing", async () => {
+test("activate registers a Mac; activating it again writes nothing, even with a new name", async () => {
   const key = await mint();
-  const first = await call("activate", { key, device: mac("A") });
+  const first = await call("activate", { key, device: mac("a") });
   assert.equal(first.status, 200);
-  assert.deepEqual(ids(first.body), ["A"]);
+  assert.deepEqual(ids(first.body), [mac("a").id]);
   assert.match(
     first.body.devices[0].activated,
     /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/,
     "no fractional seconds",
   );
+  const before = versions();
   const again = await call("activate", {
     key: ` ${key.toLowerCase()} `,
-    device: mac("A"),
+    device: { ...mac("a"), name: "Renamed", model: "Mac99,1" },
   });
   assert.equal(again.status, 200);
-  assert.deepEqual(again.body, first.body);
+  assert.deepEqual(again.body, first.body, "the stored Mac, unchanged");
+  assert.deepEqual(versions(), before, "no write");
 });
 
 test("a fourth Mac is refused with 409", async () => {
   const key = await mint();
-  for (const id of ["A", "B", "C"])
-    assert.equal(
-      (await call("activate", { key, device: mac(id) })).status,
-      200,
-    );
-  const fourth = await call("activate", { key, device: mac("D") });
+  await activateAll(key, ["a", "b", "c"]);
+  const fourth = await call("activate", { key, device: mac("d") });
   assert.equal(fourth.status, 409);
   assert.equal(
     fourth.body.error,
     "This license is already active on 3 Macs. Deactivate one first.",
   );
   assert.equal(
-    (await call("activate", { key, device: mac("B") })).status,
+    (await call("activate", { key, device: mac("b") })).status,
     200,
     "a registered Mac still gets in",
   );
@@ -109,29 +165,38 @@ test("a fourth Mac is refused with 409", async () => {
 
 test("Macs activating at the same instant never pass the limit or drop each other", async () => {
   const key = await mint();
-  const macs = ["A", "B", "C", "D", "E"];
+  const names = ["a", "b", "c", "d", "e"];
   const results = await Promise.all(
-    macs.map((id) => call("activate", { key, device: mac(id) })),
+    names.map((name) => call("activate", { key, device: mac(name) })),
   );
   assert.deepEqual(
     results.map((r) => r.status).sort(),
     [200, 200, 200, 409, 409],
   );
-  const winners = macs.filter((_, i) => results[i].status === 200);
-  const listed = await call("devices", { key, deviceId: winners[0] });
-  assert.deepEqual(ids(listed.body).sort(), winners);
+  for (const [i, name] of names.entries()) {
+    const listed = await call("devices", { key, deviceId: mac(name).id });
+    assert.equal(
+      listed.status,
+      results[i].status === 200 ? 200 : 403,
+      "the winners are on the key, the others aren't",
+    );
+    if (listed.status === 200) assert.equal(listed.body.devices.length, 3);
+  }
 });
 
 test("devices answers only a Mac registered on that key", async () => {
   const key = await mint();
-  await call("activate", { key, device: mac("A") });
-  const listed = await call("devices", { key, deviceId: "A" });
+  await activateAll(key, ["a"]);
+  const listed = await call("devices", { key, deviceId: mac("a").id });
   assert.equal(listed.status, 200);
-  assert.deepEqual(ids(listed.body), ["A"]);
-  assert.equal((await call("devices", { key, deviceId: "B" })).status, 403);
+  assert.deepEqual(ids(listed.body), [mac("a").id]);
+  assert.equal(
+    (await call("devices", { key, deviceId: mac("b").id })).status,
+    403,
+  );
   const unminted = await call("devices", {
     key: "ISOLA-W7UD-A389-NXLG",
-    deviceId: "A",
+    deviceId: mac("a").id,
   });
   assert.equal(
     unminted.status,
@@ -140,80 +205,157 @@ test("devices answers only a Mac registered on that key", async () => {
   );
 });
 
-test("deactivate removes another Mac, asked by a registered one", async () => {
+test("a Mac sees its own id and only opaque handles for the others", async () => {
   const key = await mint();
-  for (const id of ["A", "B", "C"])
-    await call("activate", { key, device: mac(id) });
+  await activateAll(key, ["alpha", "bravo", "charlie"]);
+  const asAlpha = (await call("devices", { key, deviceId: mac("alpha").id }))
+    .body;
+  const asBravo = (await call("devices", { key, deviceId: mac("bravo").id }))
+    .body;
+  assert.equal(asAlpha.devices[0].id, mac("alpha").id);
+  assert.equal(asBravo.devices[1].id, mac("bravo").id);
+  for (const other of [asAlpha.devices[1], asAlpha.devices[2]])
+    assert.match(other.id, HANDLE);
   assert.equal(
-    (await call("deactivate", { key, deviceId: "Z", target: "B" })).status,
-    403,
+    asAlpha.devices[2].id,
+    asBravo.devices[2].id,
+    "a Mac's handle is the same whoever asks",
   );
-  const removed = await call("deactivate", { key, deviceId: "A", target: "B" });
-  assert.equal(removed.status, 200);
-  assert.deepEqual(ids(removed.body), ["A", "C"]);
+  for (const raw of [mac("bravo").id, mac("charlie").id])
+    assert.ok(
+      !JSON.stringify(asAlpha).includes(raw),
+      "no other Mac's id in the reply",
+    );
+  const activated = await call("activate", { key, device: mac("charlie") });
+  assert.deepEqual(
+    ids(activated.body),
+    [asBravo.devices[0].id, asAlpha.devices[1].id, mac("charlie").id],
+    "activate answers the same way",
+  );
+
+  // deactivate takes a handle: another Mac's raw id matches nothing.
+  const byId = await call("deactivate", {
+    key,
+    deviceId: mac("alpha").id,
+    target: mac("charlie").id,
+  });
+  assert.equal(byId.status, 200);
+  assert.equal(byId.body.devices.length, 3);
+  const byHandle = await call("deactivate", {
+    key,
+    deviceId: mac("alpha").id,
+    target: asAlpha.devices[2].id,
+  });
+  assert.deepEqual(ids(byHandle.body), ids(asAlpha).slice(0, 2));
   assert.equal(
-    (await call("devices", { key, deviceId: "B" })).status,
+    (await call("devices", { key, deviceId: mac("charlie").id })).status,
     403,
     "the removed Mac is out",
   );
   assert.equal(
-    (await call("activate", { key, device: mac("D") })).status,
+    (await call("activate", { key, device: mac("delta") })).status,
     200,
     "and its slot is free",
   );
-  const itself = await call("deactivate", { key, deviceId: "C", target: "C" });
-  assert.deepEqual(ids(itself.body), ["A", "D"]);
+});
+
+test("a Mac can remove itself or a Mac activated after it, never an earlier one", async () => {
+  const key = await mint();
+  await activateAll(key, ["first", "second", "third"]);
+  const seen = (await call("devices", { key, deviceId: mac("third").id })).body
+    .devices;
+  const refused = await call("deactivate", {
+    key,
+    deviceId: mac("third").id,
+    target: seen[0].id,
+  });
+  assert.equal(refused.status, 403);
+  assert.match(refused.body.error, /activated before it/);
+  assert.equal(
+    (await call("devices", { key, deviceId: mac("first").id })).body.devices
+      .length,
+    3,
+    "nothing removed",
+  );
+  assert.equal(
+    (
+      await call("deactivate", {
+        key,
+        deviceId: mac("third").id,
+        target: seen[1].id,
+      })
+    ).status,
+    403,
+    "the second Mac is earlier too",
+  );
+  assert.equal(
+    (
+      await call("deactivate", {
+        key,
+        deviceId: mac("zulu").id,
+        target: seen[2].id,
+      })
+    ).status,
+    403,
+    "a Mac not on the key removes nothing",
+  );
+
+  // The first Mac clears out the later ones; a Mac can always remove itself.
+  const asFirst = (await call("devices", { key, deviceId: mac("first").id }))
+    .body.devices;
+  const cleared = await call("deactivate", {
+    key,
+    deviceId: mac("first").id,
+    target: asFirst[2].id,
+  });
+  assert.deepEqual(ids(cleared.body), ids({ devices: asFirst }).slice(0, 2));
+  const itself = await call("deactivate", {
+    key,
+    deviceId: mac("second").id,
+    target: mac("second").id,
+  });
+  assert.equal(itself.status, 200);
+  assert.equal(itself.body.devices.length, 1);
+  assert.match(itself.body.devices[0].id, HANDLE, "it's off the list it gets");
 });
 
 test("the shared demo key has no device limit and keeps no list", async () => {
   const key = "ISOLA-DEMO-7Q4K-2M9X";
-  for (const id of ["A", "B", "C", "D", "E"]) {
-    const { status, body } = await call("activate", { key, device: mac(id) });
+  for (const name of ["a", "b", "c", "d", "e"]) {
+    const { status, body } = await call("activate", { key, device: mac(name) });
     assert.equal(status, 200);
-    assert.deepEqual(ids(body), [id], "each Mac sees only itself");
+    assert.deepEqual(ids(body), [mac(name).id], "each Mac sees only itself");
   }
-  assert.deepEqual((await call("devices", { key, deviceId: "A" })).body, {
-    devices: [],
-  });
+  assert.deepEqual(
+    (await call("devices", { key, deviceId: mac("a").id })).body,
+    { devices: [] },
+  );
 });
 
-test("recover answers the same 202 whether or not the address has a license", async (t) => {
+test("recover answers the same 202 whatever the address; {mail} only says whether mail is set up", async (t) => {
   const key = await mint("known@example.com");
   const known = await call("recover", { email: "Known@Example.com" });
   const unknown = await call("recover", { email: "nobody@example.com" });
   assert.equal(known.status, 202);
-  assert.deepEqual(known.body, unknown.body);
+  assert.deepEqual(known.body, { mail: false });
+  assert.deepEqual(unknown.body, known.body);
   assert.equal(
     known.headers.get("content-length"),
     unknown.headers.get("content-length"),
   );
 
-  // With Resend configured (fetch stubbed, so nothing leaves this process) only the known address gets mail.
-  const sent: { url: string; init?: RequestInit }[] = [];
-  t.mock.method(
-    globalThis,
-    "fetch",
-    async (url: string | URL | Request, init?: RequestInit) => {
-      sent.push({ url: String(url), init });
-      return Response.json({ id: "stub" });
-    },
+  const sent = mailbox(t);
+  const asked = await Promise.all(
+    ["nobody@example.com", "known@example.com"].map((email) =>
+      call("recover", { email }),
+    ),
   );
-  process.env.RESEND_API_KEY = "re_test";
-  process.env.RESEND_FROM = "Isola <licenses@example.com>";
-  t.after(() => {
-    delete process.env.RESEND_API_KEY;
-    delete process.env.RESEND_FROM;
-  });
-  assert.equal(
-    (await call("recover", { email: "nobody@example.com" })).status,
-    202,
-  );
-  assert.equal(
-    (await call("recover", { email: "known@example.com" })).status,
-    202,
-  );
-  await new Promise((resolve) => setTimeout(resolve, 50)); // the mail goes out after the reply
-  assert.equal(sent.length, 1);
+  for (const { status, body } of asked) {
+    assert.equal(status, 202);
+    assert.deepEqual(body, { mail: true });
+  }
+  await delivered();
+  assert.equal(sent.length, 1, "only the known address gets mail");
   assert.equal(sent[0].url, "https://api.resend.com/emails");
   const headers = new Headers(sent[0].init?.headers);
   assert.equal(headers.get("authorization"), "Bearer re_test");
@@ -224,23 +366,302 @@ test("recover answers the same 202 whether or not the address has a license", as
   assert.ok(mail.text.includes(key));
 });
 
-test("demo keys are capped per network address", async () => {
+test("only a plain e-mail address is taken, lower-cased", async () => {
+  for (const email of [
+    "nope",
+    '"a b"@example.com',
+    '"a"@example.com',
+    "<a@example.com>",
+    "Name <a@example.com>",
+    "a@example.com, b@example.com",
+    "a@example.com,b@example.com",
+    "a@example.com;b@example.com",
+    "a b@example.com",
+    "a@exam ple.com",
+    "a\n@example.com",
+    "a@example",
+    "a@@example.com",
+    "a..b@example.com",
+    "a@example..com",
+    "a@-example.com",
+    "à@example.com",
+    `${"a".repeat(243)}@example.com`,
+  ]) {
+    assert.equal((await call("recover", { email })).status, 400, email);
+    assert.equal((await call("demo", { email })).status, 400, email);
+  }
+  const ok = await call("demo", { email: " You+Shop@Example.COM " });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.email, "you+shop@example.com");
+  assert.equal(
+    (await call("recover", { email: `${"a".repeat(242)}@example.com` })).status,
+    202,
+    "254 characters is the most",
+  );
+});
+
+test("mail goes out at most 3 times an hour per mailbox, +tags included", async (t) => {
+  const tags = ["", "+a", "+b", "+c"];
+  for (const tag of tags) await mint(`capped${tag}@example.com`);
+  await mint("other@example.com");
+  const sent = mailbox(t);
+  for (const tag of tags)
+    assert.equal(
+      (await call("recover", { email: `capped${tag}@example.com` })).status,
+      202,
+    );
+  await call("recover", { email: "other@example.com" });
+  await delivered();
+  const to = sent.map((s) => JSON.parse(String(s.init?.body)).to[0]).sort();
+  assert.deepEqual(to, [
+    "capped+a@example.com",
+    "capped+b@example.com",
+    "capped@example.com",
+    "other@example.com",
+  ]);
+});
+
+test("an address lists each key once, at most 20, and its index is rewritten only when that changes", async () => {
+  assert.deepEqual(withKey(null, "K1"), { keys: ["K1"] });
+  assert.equal(withKey({ keys: ["K1"] }, "K1"), undefined, "already there");
+  assert.deepEqual(withKey({ keys: ["K1", "K1", "K2"] }, "K3"), {
+    keys: ["K1", "K2", "K3"],
+  });
+  const twenty = Array.from({ length: 20 }, (_, i) => `K${i}`);
+  assert.equal(withKey({ keys: twenty }, "K20"), undefined, "full");
+  assert.deepEqual(withKey({ keys: [...twenty, "K20"] }, "K21"), {
+    keys: twenty,
+  });
+
+  const email = "many@example.com";
+  const keys: string[] = [];
+  for (let i = 0; i < 20; i++) keys.push(await mint(email));
+  const index = () =>
+    [...memory].find(
+      ([path, { body }]) =>
+        path.startsWith("emails/") && body.includes(keys[0]),
+    )!;
+  const [path, before] = index();
+  assert.deepEqual(JSON.parse(before.body), { keys });
+  await mint(email);
+  assert.equal(
+    memory.get(path)?.etag,
+    before.etag,
+    "the 21st key isn't indexed, and nothing is written",
+  );
+});
+
+test("no stored object holds an e-mail address, and index names are HMACs of it", async (t) => {
+  process.env.LICENSE_SECRET = "test-secret";
+  t.after(() => {
+    delete process.env.LICENSE_SECRET;
+  });
+  const email = "private.person@example.com";
+  const key = await mint(email);
+  for (const [path, { body }] of memory)
+    assert.ok(!body.includes(email), `${path} holds the address`);
+  assert.ok(
+    memory.has(`emails/${hmac("test-secret", email).toString("hex")}.json`),
+  );
+  assert.ok(!memory.has(`emails/${sha256(email)}.json`), "not a plain hash");
+  const license = JSON.parse(memory.get(`licenses/${sha256(key)}.json`)!.body);
+  assert.deepEqual(Object.keys(license).sort(), ["created", "devices", "key"]);
+});
+
+test("LICENSE_SECRET keys the handles; production refuses to run without it", async (t) => {
+  t.after(() => {
+    delete process.env.LICENSE_SECRET;
+    delete process.env.VERCEL_ENV;
+    delete process.env.BLOB_STORE_ID;
+  });
+  const key = await mint();
+  await activateAll(key, ["a", "b"]);
+  const other = async () =>
+    (await call("devices", { key, deviceId: mac("a").id })).body.devices[1].id;
+  const devHandle = await other();
+  process.env.LICENSE_SECRET = "test-secret";
+  assert.equal(
+    await other(),
+    hmac("test-secret", `${key}:${mac("b").id}`)
+      .toString("base64url")
+      .slice(0, 22),
+    "base64url(HMAC-SHA256(secret, key:id)), 22 characters",
+  );
+  assert.notEqual(devHandle, await other());
+
+  delete process.env.LICENSE_SECRET;
+  process.env.VERCEL_ENV = "production";
+  // A store "configured": the secret is checked first, so no Blob call is made.
+  process.env.BLOB_STORE_ID = "store_test";
+  for (const action of [
+    "demo",
+    "activate",
+    "devices",
+    "deactivate",
+    "recover",
+  ]) {
+    const { status, body } = await call(action, {});
+    assert.equal(status, 503, action);
+    assert.equal(
+      body.error,
+      "The license server isn’t set up yet. Please try again later.",
+    );
+  }
+});
+
+test("throttles answer 503 with Retry-After, never 429: per network address and per key", async () => {
   const from = "203.0.113.9";
   for (let i = 0; i < 5; i++)
     assert.equal((await call("demo", {}, from)).status, 201);
   const capped = await call("demo", {}, from);
-  assert.equal(capped.status, 429);
+  assert.equal(capped.status, 503);
   assert.ok(Number(capped.headers.get("retry-after")) > 0);
   assert.equal(
     (await call("demo", {})).status,
     201,
     "another address still gets one",
   );
+
+  // The Mac app's routes: 120 calls an hour from one address (the demo key has no per-key cap)...
+  const office = "203.0.113.10";
+  const demoKey = "ISOLA-DEMO-7Q4K-2M9X";
+  for (let i = 0; i < 120; i++)
+    assert.equal(
+      (await call("devices", { key: demoKey, deviceId: "x" }, office)).status,
+      200,
+    );
+  const busy = await call("devices", { key: demoKey, deviceId: "x" }, office);
+  assert.equal(busy.status, 503);
+  assert.ok(Number(busy.headers.get("retry-after")) > 0);
+  assert.deepEqual(Object.keys(busy.body), ["error"]);
+
+  // ...and 60 an hour for one key, from anywhere.
+  const key = await mint();
+  await activateAll(key, ["a"]);
+  for (let i = 1; i < 60; i++)
+    assert.equal(
+      (await call("devices", { key, deviceId: mac("a").id })).status,
+      200,
+    );
+  for (const action of ["devices", "activate", "deactivate"]) {
+    const { status, headers, body } = await call(action, {
+      key,
+      deviceId: mac("a").id,
+      target: mac("a").id,
+      device: mac("a"),
+    });
+    assert.equal(status, 503, action);
+    assert.ok(Number(headers.get("retry-after")) > 0);
+    assert.equal(body.error, "Too many requests. Please try again later.");
+  }
+});
+
+test("every POST must be JSON, so a form on another site can't drive the API", async () => {
+  const post = (headers: Record<string, string> = {}, method = "POST") =>
+    api.fetch(
+      new Request("http://localhost/api/license/demo", {
+        method,
+        headers: { "x-real-ip": `192.0.2.${++address % 250}`, ...headers },
+        body: method === "POST" ? "{}" : undefined,
+      }),
+    );
+  for (const type of [
+    undefined, // fetch's default for a string body: text/plain
+    "text/plain",
+    "application/x-www-form-urlencoded",
+    "multipart/form-data; boundary=x",
+    "application/jsonp",
+  ]) {
+    const response = await post(type ? { "content-type": type } : {});
+    assert.equal(response.status, 415, String(type));
+    assert.equal(response.headers.get("access-control-allow-origin"), null);
+  }
+  assert.equal(
+    (await post({ "content-type": "Application/JSON; charset=utf-8" })).status,
+    201,
+  );
+  const preflight = await post({}, "OPTIONS");
+  assert.equal(preflight.status, 405, "a CORS preflight gets nothing");
+  assert.equal(preflight.headers.get("access-control-allow-origin"), null);
+});
+
+test("text must be well-formed, and long names are cut by code point", async () => {
+  const key = await mint();
+  for (const device of [
+    { ...mac("a"), name: "Mac \ud800" },
+    { ...mac("a"), model: "\udfffMac16,1" },
+    { ...mac("a"), id: "a-\ud83d" },
+  ])
+    assert.equal((await call("activate", { key, device })).status, 400);
+  assert.equal(
+    (await call("devices", { key, deviceId: "\ud800" })).status,
+    400,
+  );
+  const long = await call("activate", {
+    key,
+    device: { ...mac("a"), name: "🍎".repeat(150) },
+  });
+  assert.equal(long.status, 200);
+  assert.equal(long.body.devices[0].name, "🍎".repeat(100));
+});
+
+test("a Blob call that hangs is aborted at its deadline, with an error the SDK won't retry", async () => {
+  let reason: unknown;
+  const hung = blobCall(
+    (signal) =>
+      new Promise((_, reject) =>
+        signal.addEventListener("abort", () => {
+          reason = signal.reason;
+          reject(signal.reason);
+        }),
+      ),
+    20,
+  );
+  await assert.rejects(hung, {
+    status: 503,
+    message: "The license server is busy. Please try again in a moment.",
+  });
+  assert.equal((reason as Error).name, "AbortError");
+  assert.equal(await blobCall(async () => "done", 20), "done");
+});
+
+test("a write that fails surfaces at once, and endless races end in a 503", async (t) => {
+  const key = await mint();
+  t.mock.method(console, "error", () => {});
+  let writes = 0;
+  const set = t.mock.method(memory, "set", () => {
+    writes++;
+    throw new Error("disk full");
+  });
+  const failed = await call("activate", { key, device: mac("a") });
+  assert.equal(failed.status, 500);
+  assert.deepEqual(Object.keys(failed.body), ["error"]);
+  assert.equal(writes, 1, "not retried");
+  set.mock.restore();
+
+  // Someone else writes between every read and write: 5 tries, then the caller hears about it.
+  const realGet = memory.get.bind(memory);
+  let n = 0;
+  t.mock.method(memory, "get", (path: string) => {
+    const hit = realGet(path);
+    return hit && { ...hit, etag: `moved-${++n}` };
+  });
+  const raced = await call("activate", { key, device: mac("a") });
+  assert.equal(raced.status, 503);
+  assert.equal(
+    raced.body.error,
+    "The license server is busy. Please try again in a moment.",
+  );
 });
 
 test("bad requests get a plain 4xx and no internals", async () => {
   const raw = (path: string, init?: RequestInit) =>
-    api.fetch(new Request(`http://localhost${path}`, init));
+    api.fetch(
+      new Request(`http://localhost${path}`, {
+        ...init,
+        headers: { "content-type": "application/json", ...init?.headers },
+      }),
+    );
   const malformed = await raw("/api/license/activate", {
     method: "POST",
     body: "{nope",
@@ -252,7 +673,7 @@ test("bad requests get a plain 4xx and no internals", async () => {
     400,
   );
   assert.equal(
-    (await call("activate", { key: "ISOLA-NOPE", device: mac("A") })).status,
+    (await call("activate", { key: "ISOLA-NOPE", device: mac("a") })).status,
     400,
   );
   assert.equal(
@@ -264,18 +685,22 @@ test("bad requests get a plain 4xx and no internals", async () => {
     (
       await call("activate", {
         key: "ISOLA-W7UD-A389-NXLG",
-        device: { ...mac("A"), id: "x".repeat(101) },
+        device: { ...mac("a"), id: "x".repeat(101) },
       })
     ).status,
     400,
   );
   assert.equal(
-    (await call("activate", { key: "ISOLA-W7UD-A389-NXLG", device: mac("A") }))
+    (await call("activate", { key: "ISOLA-W7UD-A389-NXLG", device: mac("a") }))
       .status,
     404,
   );
-  assert.equal((await call("demo", { email: "nope" })).status, 400);
-  assert.equal((await call("recover", { email: "nope" })).status, 400);
+  assert.equal(
+    (await call("deactivate", { key: "ISOLA-W7UD-A389-NXLG", deviceId: "a" }))
+      .status,
+    400,
+    "no target",
+  );
   assert.equal((await call("nope", {})).status, 404);
   assert.equal(
     (await call("constructor", {})).status,
@@ -295,7 +720,7 @@ test("bad requests get a plain 4xx and no internals", async () => {
 });
 
 test("a deployment without a Blob store answers 503 rather than keep keys in memory", async (t) => {
-  process.env.VERCEL_ENV = "production";
+  process.env.VERCEL_ENV = "preview";
   t.after(() => {
     delete process.env.VERCEL_ENV;
   });

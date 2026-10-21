@@ -22,10 +22,11 @@ Brand, price, links and contact live in `src/config.ts`; release metadata is in 
 
 ## Licence server (`api/license.ts`)
 
-One Vercel Function answers `POST /api/license/{demo,activate,devices,deactivate,recover}` (shapes at the top of the file; `src/lib/api.ts` is the site's client, the Mac app's is in `License.swift`). Up to 3 Macs per key; `ISOLA-DEMO-7Q4K-2M9X` stays a shared key with no limit. Licences live in a private Vercel Blob store, one JSON object per key and an e-mail index, both named by hashes. With no store configured it keeps them in memory (local runs and tests); a deployment answers 503 instead.
+One Vercel Function answers `POST /api/license/{demo,activate,devices,deactivate,recover}` (shapes at the top of the file; `src/lib/api.ts` is the site's client, the Mac app's is in `License.swift`). Up to 3 Macs per key; `ISOLA-DEMO-7Q4K-2M9X` stays a shared key with no limit. A Mac's id is its credential: each Mac sees its own id and an opaque handle for every other Mac, and can remove itself or a Mac activated after it, never an earlier one. Licences live in a private Vercel Blob store, one JSON object per key (named by a hash of it) and an e-mail index per address (named by an HMAC of it); licences don't hold the address. With no store configured it keeps them in memory (local runs and tests); a deployment answers 503 instead. Requests must be `application/json` (415 otherwise), and throttles (per network address, and per key for the Mac app's calls) answer 503 with `Retry-After`, never 429.
 
 - `BLOB_READ_WRITE_TOKEN` or `BLOB_STORE_ID`: added by Vercel when a **private** Blob store is created for, or connected to, the project. Required on deployments.
-- `RESEND_API_KEY` + `RESEND_FROM` (e.g. `Isola <licenses@your-domain>`, a domain verified in Resend): optional. Without them `recover` sends nothing; it answers 202 either way.
+- `LICENSE_SECRET`: a long random string (`openssl rand -base64 32`) that keys the HMACs. Required in production (503 without it); elsewhere a public development secret stands in. Changing it orphans every e-mail index and gives every Mac a new handle.
+- `RESEND_API_KEY` + `RESEND_FROM` (e.g. `Isola <licenses@your-domain>`, a domain verified in Resend): optional. Without them `recover` sends nothing and answers 202 `{mail: false}`; with them, 202 `{mail: true}` for every address, known or not.
 
 ## Isola for Mac (`mac/`)
 
