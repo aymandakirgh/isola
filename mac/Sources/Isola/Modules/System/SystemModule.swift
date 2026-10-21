@@ -76,9 +76,12 @@ enum SystemModule {
                 kind.symbol = symbol
                 kind.earbuds = ["airpods", "airpods.gen3", "airpods.gen4", "airpods.pro", "airpodspro", "beats.earphones", "earbuds"].contains(symbol)
             }
+            // `color=pink` (or the pairing-card label `red`, or the code `0x02`): an AirPods Max
+            // colour, as its BLE advertisement would report it.
             let device = ConnectedDevice(
                 id: "debug-\(name)", name: name, symbol: kind.symbol,
-                battery: a["battery"].flatMap(Double.init), caseBattery: a["case"].flatMap(Double.init)
+                battery: a["battery"].flatMap(Double.init), caseBattery: a["case"].flatMap(Double.init),
+                tint: a["color"].flatMap(BluetoothMonitor.maxTint)
             )
             if a["on"] == "0" {
                 BluetoothMonitor.shared.disconnect(device)
@@ -120,6 +123,7 @@ enum SystemModule {
 
     static func gallery() {
         selfCheck()
+        ProximityPairing.selfCheck()
         registerSettings()
         let airpods = ConnectedDevice(id: "a", name: "AirPods Pro", symbol: "airpodspro", battery: 0.76, caseBattery: 0.9)
         let speaker = ConnectedDevice(id: "b", name: "HomePod mini", symbol: "homepod.fill", battery: nil, caseBattery: nil)
@@ -140,6 +144,12 @@ enum SystemModule {
             Gallery.island("system-bt-speaker-\(suffix)", item: BluetoothItems.connected(speaker, earbuds: false), geometry: g)
             Gallery.island("system-bt-off-\(suffix)", item: BluetoothItems.disconnected(airpods), geometry: g)
             Gallery.island("system-bt-low-\(suffix)", item: BluetoothItems.lowBattery(headphones), geometry: g)
+            // AirPods Max in each colour their advertisement can name, by the pairing-card label.
+            for color in BluetoothMonitor.maxColors.values {
+                let airpodsMax = ConnectedDevice(id: "m", name: "AirPods Max", symbol: DeviceSymbol.first(["airpods.max", "airpodsmax"]), battery: 0.8, caseBattery: nil, tint: color.tint)
+                let label = color.label.lowercased().replacingOccurrences(of: " ", with: "")
+                Gallery.island("system-bt-airpodsmax-\(label)-\(suffix)", item: BluetoothItems.connected(airpodsMax, earbuds: false), geometry: g)
+            }
             Gallery.island("system-focus-on-\(suffix)", item: FocusItems.changed(work, on: true), geometry: g)
             Gallery.island("system-focus-off-\(suffix)", item: FocusItems.changed(sleep, on: false), geometry: g)
             Gallery.island("system-focus-activity-\(suffix)", item: FocusItems.activity(work), geometry: g)

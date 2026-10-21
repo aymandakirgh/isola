@@ -62,10 +62,10 @@ enum SystemAudio {
         let deviceName = name?.takeRetainedValue() as String? ?? "Speakers"
         // CoreAudio names a Bluetooth output after the device the Bluetooth monitor tracks.
         let bluetooth = transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
-        let known = bluetooth ? DevicesState.shared.devices.first { $0.name == deviceName }?.symbol : nil
+        let known = bluetooth ? DevicesState.shared.devices.first { $0.name == deviceName } : nil
         return HUDOutput(
             name: deviceName, transport: transport, dataSource: hasSource ? source : nil,
-            deviceSymbol: known, model: model?.takeRetainedValue() as String?
+            deviceSymbol: known?.symbol, deviceTint: known?.tint, model: model?.takeRetainedValue() as String?
         )
     }
 

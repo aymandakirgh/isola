@@ -102,6 +102,8 @@ struct ConnectedDevice: Identifiable, Equatable {
     var symbol: String
     var battery: Double?  // 0...1
     var caseBattery: Double?
+    /// The device's colour, when its BLE advertisement tells it (AirPods Max); tints its glyph.
+    var tint: NSColor? = nil
 }
 
 @MainActor @Observable
