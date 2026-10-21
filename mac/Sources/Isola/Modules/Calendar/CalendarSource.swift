@@ -7,6 +7,8 @@ import EventKit
 final class CalendarSource {
     static let shared = CalendarSource()
     private var store = EKEventStore()
+    /// The EventKit events behind this week's `CalendarEvent`s (links, notes, places).
+    private var ekEvents: [String: EKEvent] = [:]
     private var ticker: Timer?
     private var announced: String?
     private var leaveNotified: Set<String> = []
@@ -55,6 +57,7 @@ final class CalendarSource {
         let tomorrow = cal.date(byAdding: .day, value: 1, to: day)!
         let week = cal.dateInterval(of: .weekOfYear, for: day) ?? DateInterval(start: day, end: tomorrow)
         var events = model.debugEvents
+        ekEvents = [:]
 
         if authorized {
             let calendars = store.calendars(for: .event).filter {
@@ -62,7 +65,11 @@ final class CalendarSource {
             }
             let predicate = store.predicateForEvents(withStart: week.start, end: week.end, calendars: calendars)
             let found = calendars.isEmpty ? [] : store.events(matching: predicate).filter { prefs.showDeclined || !Self.declined($0) }
-            events += found.map(Self.map)
+            for e in found {
+                let event = Self.map(e)
+                ekEvents[event.id] = e
+                events.append(event)
+            }
         }
         // Multi-day events are listed on every day they cover, and dotted on each of them.
         state.today = events.filter { $0.end > day && $0.start < tomorrow }.sorted { $0.start < $1.start }
@@ -114,6 +121,49 @@ final class CalendarSource {
         CalendarPreferences.shared.dismissed.append(id)
     }
 
+    /// Option-click on an event: join its video call, else show it in the chosen calendar app.
+    func open(_ e: CalendarEvent) {
+        let ek = ekEvents[e.id]
+        if let url = Self.meetingURL(in: [ek?.url?.absoluteString, e.location, ek?.notes]) {
+            NSWorkspace.shared.open(url)
+        } else if let ek, CalendarPreferences.shared.openWith == "calendar", let url = Self.calendarLink(ek) {
+            NSWorkspace.shared.open(url)
+        } else {
+            Self.openCalendarApp()  // Fantastical and Notion Calendar have no reliable link to one event
+        }
+    }
+
+    private static let meetingHosts = [
+        "zoom.us", "zoomgov.com", "meet.google.com", "teams.microsoft.com", "teams.live.com", "webex.com",
+        "facetime.apple.com", "whereby.com", "meet.jit.si", "chime.aws", "gotomeeting.com", "around.co",
+    ]
+
+    /// The first video-call link in an event's URL, location or notes.
+    static func meetingURL(in texts: [String?]) -> URL? {
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        for text in texts.compactMap({ $0 }) {
+            for match in detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) ?? [] {
+                guard let url = match.url, let host = url.host?.lowercased() else { continue }
+                if meetingHosts.contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return url }
+            }
+        }
+        return nil
+    }
+
+    /// Calendar.app's link to an event; a recurring one also names the occurrence (UTC unless all-day).
+    private static func calendarLink(_ e: EKEvent) -> URL? {
+        guard let id = e.calendarItemIdentifier.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        var occurrence = ""
+        if e.hasRecurrenceRules {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+            if !e.isAllDay { f.timeZone = TimeZone(identifier: "UTC") }
+            occurrence = "/" + f.string(from: e.startDate)
+        }
+        return URL(string: "ical://ekevent\(occurrence)/\(id)?method=show&options=more")
+    }
+
     /// Opens the calendar app chosen in settings (Calendar, Fantastical, Notion Calendar).
     static func openCalendarApp() {
         let ids = ["fantastical": "com.flexibits.fantastical2.mac", "notion": "com.cron.electron"]
@@ -142,8 +192,12 @@ final class CalendarSource {
         )
     }
 
-    /// Runs with the gallery (`Isola --gallery`): multi-day splitting.
+    /// Runs with the gallery (`Isola --gallery`): meeting links and multi-day splitting.
     static func selfCheck() {
+        precondition(meetingURL(in: [nil, "Studio 3", "Join: https://us02web.zoom.us/j/123?pwd=x"])?.host == "us02web.zoom.us")
+        precondition(meetingURL(in: ["https://meet.google.com/abc-defg-hij"]) != nil)
+        precondition(meetingURL(in: ["Agenda: https://docs.google.com/d/1", "Via Roma 12"]) == nil)
+
         let cal = Calendar.current
         let day = cal.startOfDay(for: Date(timeIntervalSince1970: 1_800_000_000))
         func at(_ days: Int, _ hours: Double) -> Date { cal.date(byAdding: .day, value: days, to: day)!.addingTimeInterval(hours * 3600) }

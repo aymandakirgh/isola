@@ -23,6 +23,7 @@ enum CalendarItems {
         }
         .peek(onHover: true) { EventPeek(event: e) }
         .expanded(size: panelSize) { panel }
+        .onOptionTap { CalendarSource.shared.open(e) }
         .onSwipe { direction in
             // Swipe up dismisses this event (restore it from the expanded calendar).
             guard direction == .up, !Island.shared.expanded else { return false }
@@ -49,6 +50,7 @@ enum CalendarItems {
             TimerCountdown(snapshot: snapshot).padding(.trailing, 9)
         }
         .expanded(size: panelSize) { LiveCalendarPanel() }
+        .onOptionTap { CalendarTimer.shared.togglePause() }
     }
 
     static func timerDone() -> IslandItem {
@@ -135,9 +137,9 @@ private struct TimerRing: View {
     var snapshot: TimerSnapshot?
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let progress = (snapshot ?? CalendarTimer.shared.snapshot)?.progress(at: context.date) ?? 0
-            BatteryRing(level: progress, color: Palette.amber, size: 21, lineWidth: 2.5)
-                .overlay(Image(systemName: "timer").font(.system(size: 8, weight: .bold)).foregroundStyle(Palette.amber))
+            let timer = snapshot ?? CalendarTimer.shared.snapshot
+            BatteryRing(level: timer?.progress(at: context.date) ?? 0, color: Palette.amber, size: 21, lineWidth: 2.5)
+                .overlay(Image(systemName: timer?.paused == nil ? "timer" : "pause.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(Palette.amber))
         }
     }
 }
@@ -146,10 +148,10 @@ private struct TimerCountdown: View {
     var snapshot: TimerSnapshot?
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let remaining = (snapshot ?? CalendarTimer.shared.snapshot)?.remaining(at: context.date) ?? 0
-            Text(CalendarText.clock(remaining))
+            let timer = snapshot ?? CalendarTimer.shared.snapshot
+            Text(CalendarText.clock(timer?.remaining(at: context.date) ?? 0))
                 .font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                .foregroundStyle(Palette.amber).lineLimit(1).fixedSize()
+                .foregroundStyle(timer?.paused == nil ? Palette.amber : Palette.muted).lineLimit(1).fixedSize()
         }
     }
 }
@@ -293,6 +295,7 @@ struct CalendarPanel: View {
                         .font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(Palette.amber)
                 }
                 Spacer()
+                PanelButton(title: timer.paused == nil ? "Pause" : "Resume") { CalendarTimer.shared.togglePause() }
                 PanelButton(title: "Stop") { CalendarTimer.shared.stop() }
             } else {
                 Text("Timer").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)

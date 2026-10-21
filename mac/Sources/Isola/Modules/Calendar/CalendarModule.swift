@@ -100,6 +100,7 @@ enum CalendarModule {
         }
         Debug.on("timer.start") { CalendarTimer.shared.start(Double($0["seconds"] ?? "300") ?? 300) }
         Debug.on("timer.stop") { _ in CalendarTimer.shared.stop() }
+        Debug.on("timer.pause") { _ in CalendarTimer.shared.togglePause() }
         Debug.on("weather.set") { args in
             let w = WeatherState.shared
             if let t = args["temp"].flatMap(Double.init) { w.temperature = t }
@@ -160,6 +161,7 @@ enum CalendarModule {
             Gallery.island("calendar-timer-\(suffix)", item: CalendarItems.timer(snapshot: timer), geometry: g)
         }
         Gallery.island("calendar-activity-peek", item: CalendarItems.event(review, panel: panel), peeking: true)
+        Gallery.island("calendar-timer-paused", item: CalendarItems.timer(snapshot: TimerSnapshot(end: timer.end, duration: timer.duration, paused: 252)))
         Gallery.island("calendar-timer-done", item: CalendarItems.timerDone())
         Gallery.island("calendar-idle", item: CalendarItems.idle(panel: panel, nextEvent: review))
         Gallery.island("calendar-expanded-events", item: CalendarItems.event(review, panel: panel), expanded: true)
