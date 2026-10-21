@@ -94,6 +94,7 @@ final class MediaController {
         state.liked = s.liked ?? false
         state.inTransition = s.inTransition
         state.audioFormat = s.audioFormat
+        state.canCopyLink = s.link != nil || s.canFetchLink
         MediaUI.shared.link = s.link
 
         if trackChanged { withAnimation(.easeInOut(duration: 0.5)) { MediaUI.shared.flipped.toggle() } }
@@ -190,10 +191,12 @@ enum MediaModule {
         Debug.on("media.previous") { _ in NowPlayingState.shared.commands.previous() }
         Debug.on("media.end") { _ in sim.stop() }
         Debug.on("media.like") { _ in NowPlayingState.shared.commands.toggleLike() }
+        Debug.on("media.open") { _ in NowPlayingState.shared.commands.openSource() }
+        Debug.on("media.copylink") { _ in NowPlayingState.shared.commands.copyLink { Debug.reply("copied=\($0)") } }
         Debug.on("media.state") { _ in
             let s = NowPlayingState.shared
             Debug.reply("source=\(NowPlayingSources.shared.source) playing=\(s.isPlaying) title=\(s.title) app=\(s.sourceBundleID ?? "-") "
-                + "canLike=\(s.canLike) liked=\(s.liked) format=\(s.audioFormat ?? "-") automix=\(s.inTransition)")
+                + "canLike=\(s.canLike) liked=\(s.liked) link=\(s.canCopyLink) format=\(s.audioFormat ?? "-") automix=\(s.inTransition)")
         }
     }
 
@@ -222,11 +225,12 @@ enum MediaModule {
             MediaSettingsView().background(Color(nsColor: .windowBackgroundColor))
         }
 
-        // Source extras: like, stream format, AutoMix.
+        // Source extras: like, copy link, stream format, AutoMix.
         NowPlayingExtras.selfCheck()
         let extras = SimulatedPlayer.sampleState(index: 2, playing: true)
         extras.canLike = true
         extras.liked = true
+        extras.canCopyLink = true
         extras.audioFormat = "Dolby Atmos"
         Gallery.island("media-expanded-extras", item: MediaActivity.item(state: extras, ui: ui), expanded: true)
         let automix = SimulatedPlayer.sampleState(index: 0, playing: true)

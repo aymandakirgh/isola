@@ -94,6 +94,7 @@ final class MediaRemoteBridge {
         s.inTransition = (num("transition") ?? 0) > 0
         s.canLike = (num("canLike") ?? 0) > 0
         s.liked = num("liked").map { $0 > 0 }
+        s.link = NowPlayingExtras.appleMusicLink(o["subscriptionStoreID"], o["storeID"])
         s.audioFormat = NowPlayingExtras.audioFormat(tier: num("tier").map { Int($0) }, rendering: num("rendering").map { Int($0) })
         if let pid = num("pid"), pid > 0 { s.bundleID = NSRunningApplication(processIdentifier: pid_t(pid))?.bundleIdentifier }
         if let b64 = o["artwork"] as? String, let bytes = Data(base64Encoded: b64) {

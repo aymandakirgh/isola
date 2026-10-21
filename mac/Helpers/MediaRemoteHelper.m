@@ -97,7 +97,8 @@ static NSDictionary *build(NSDictionary *d, Boolean isPlaying, int processID, NS
     NSDictionary *keys = @{@"Title": @"title", @"Artist": @"artist", @"Album": @"album", @"Duration": @"duration",
                            @"ElapsedTime": @"elapsed", @"PlaybackRate": @"rate", @"ShuffleMode": @"shuffle",
                            @"RepeatMode": @"repeat", @"IsExplicitTrack": @"explicit", @"IsInTransition": @"transition",
-                           @"IsLiked": @"liked"};
+                           @"IsLiked": @"liked", @"iTunesStoreIdentifier": @"storeID",
+                           @"iTunesStoreSubscriptionAdamIdentifier": @"subscriptionStoreID"};
     for (NSString *k in keys) {
         id v = d[[p stringByAppendingString:k]];
         if (usable(v)) o[keys[k]] = v;

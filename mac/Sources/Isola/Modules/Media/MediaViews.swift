@@ -313,19 +313,20 @@ private struct RoutePicker: NSViewRepresentable {
 }
 
 final class CopyFlash: ObservableObject {
-    @Published var copied = false
+    /// Result of the last copy, shown briefly.
+    @Published var copied: Bool?
 }
 
 private struct CopyLinkButton: View {
-    let link: URL
+    let state: NowPlayingState
     @StateObject private var flash = CopyFlash()
 
     var body: some View {
-        ControlIcon(symbol: flash.copied ? "checkmark" : "link", size: 12, width: 24) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(link.absoluteString, forType: .string)
-            flash.copied = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { flash.copied = false }
+        ControlIcon(symbol: flash.copied.map { $0 ? "checkmark" : "xmark" } ?? "link", size: 12, width: 24) {
+            state.commands.copyLink { ok in
+                flash.copied = ok
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { flash.copied = nil }
+            }
         }
     }
 }
@@ -367,6 +368,7 @@ struct ExpandedPlayer: View {
                     .opacity(!state.isPlaying && prefs.dimOnPause ? 0.7 : 1)
                     .scaleEffect(state.isPlaying ? 1 : 0.94)
                     .animation(.easeInOut(duration: 0.4), value: state.isPlaying)
+                    .onTapGesture { state.commands.openSource() }
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(displayTitle(state)).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
@@ -380,7 +382,7 @@ struct ExpandedPlayer: View {
                 Spacer(minLength: 6)
                 HStack(spacing: 8) {
                     if state.canLike { LikeButton(state: state) }
-                    if let link = ui.link { CopyLinkButton(link: link) }
+                    if state.canCopyLink { CopyLinkButton(state: state) }
                     SpeedMenu(state: state, ui: ui)
                     if ui.offscreen {
                         Image(systemName: "airplay.audio").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.ink.opacity(0.72))
@@ -457,7 +459,7 @@ struct MediaSettingsView: View {
             }
             Section("Source") {
                 LabeledContent("Now playing", value: sourceDescription)
-                Text("Music and Spotify are read with AppleScript only when macOS withholds system now-playing info and Automation access is already granted. Liking in Music asks for it the first time.")
+                Text("Music and Spotify are read with AppleScript only when macOS withholds system now-playing info and Automation access is already granted. Liking in Music and copying a Spotify or browser link ask for it the first time.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
