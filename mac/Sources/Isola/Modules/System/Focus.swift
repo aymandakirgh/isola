@@ -34,11 +34,6 @@ final class FocusMonitor {
         }
     }
 
-    /// Ask for Focus status access (onboarding calls this; start() never prompts).
-    static func requestAccess() {
-        INFocusStatusCenter.default.requestAuthorization { _ in }
-    }
-
     func apply(_ mode: Mode?, announce: Bool) {
         let previous = current
         current = mode
@@ -69,9 +64,16 @@ final class FocusMonitor {
         return Mode(id: "focus", name: "Focus", symbol: "moon.fill", tint: .systemIndigo)
     }
 
+    nonisolated static let database = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/DoNotDisturb/DB")
+
+    /// Full Disk Access, as far as Focus is concerned (status checks never prompt).
+    nonisolated static var canReadDatabase: Bool {
+        (try? FileManager.default.contentsOfDirectory(atPath: database.path)) != nil
+    }
+
     /// `.some(nil)` = database readable and no Focus on; `nil` = can't read it.
     nonisolated static func readDatabase() -> Mode?? {
-        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/DoNotDisturb/DB")
+        let dir = database
         guard let data = try? Data(contentsOf: dir.appendingPathComponent("Assertions.json")),
               let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
         guard let id = firstValue("assertionDetailsModeIdentifier", in: json) as? String else { return .some(nil) }

@@ -214,7 +214,7 @@ enum SettingsGallery {
         for step in OnboardingModel.Step.allCases {
             let model = OnboardingModel()
             model.step = step
-            model.statuses = [.accessibility: .granted, .calendar: .notDetermined, .bluetooth: .granted, .automation: .denied]
+            model.statuses = [.accessibility: .granted, .calendar: .notDetermined, .bluetooth: .granted, .automation: .denied, .focus: .notDetermined, .fullDiskAccess: .denied]
             if let dir = directory { capture(OnboardingWindow.makeWindow(model: model), name: "onboarding-\(step)", dir: dir) }
         }
 

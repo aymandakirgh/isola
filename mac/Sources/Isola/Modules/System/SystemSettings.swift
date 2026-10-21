@@ -84,9 +84,17 @@ struct SystemSettingsView: View {
                 Toggle("Low battery sound for devices", isOn: $prefs.deviceLowBatterySound)
                     .disabled(!prefs.deviceLowBattery)
             }
-            Section("Focus") {
+            Section {
                 Toggle("Focus changes", isOn: $prefs.focusNotification)
                 Toggle("Focus live activity", isOn: $prefs.focusActivity)
+                PermissionRow(permission: .focus)
+                PermissionRow(permission: .fullDiskAccess)
+            } header: {
+                Text("Focus")
+            } footer: {
+                Text("Without Full Disk Access, Isola can only tell that a Focus is on, not which one.")
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Section("Lock") {
                 Toggle("Lock live activity", isOn: $prefs.lockActivity)
@@ -95,5 +103,30 @@ struct SystemSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// A permission's live status (re-checked every 2 s while shown) and what to do about it.
+private struct PermissionRow: View {
+    let permission: Permission
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 2)) { _ in
+            // The gallery shows a first run rather than probing this machine.
+            let status: PermissionStatus = SystemModule.renderingGallery ? (permission == .focus ? .notDetermined : .denied) : permission.status()
+            LabeledContent {
+                switch status {
+                case .granted:
+                    Label("Allowed", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                case .denied:
+                    Button("Open Settings…") { permission.openSystemSettings() }
+                case .notDetermined:
+                    Button("Allow…") { permission.request {} }
+                }
+            } label: {
+                Text(permission.title)
+                Text(permission.detail)
+            }
+        }
     }
 }

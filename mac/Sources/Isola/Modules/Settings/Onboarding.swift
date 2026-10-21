@@ -3,6 +3,7 @@ import ApplicationServices
 import CoreBluetooth
 import CoreServices
 import EventKit
+import Intents
 import Observation
 import SwiftUI
 
@@ -10,7 +11,7 @@ enum PermissionStatus { case granted, denied, notDetermined }
 
 /// Permissions Isola can use. Status checks never prompt; `request()` runs only on a button press.
 enum Permission: String, CaseIterable, Identifiable {
-    case accessibility, calendar, bluetooth, automation
+    case accessibility, calendar, bluetooth, automation, focus, fullDiskAccess
     var id: String { rawValue }
 
     var title: String {
@@ -19,6 +20,8 @@ enum Permission: String, CaseIterable, Identifiable {
         case .calendar: "Calendar"
         case .bluetooth: "Bluetooth"
         case .automation: "Music & Spotify"
+        case .focus: "Focus Status"
+        case .fullDiskAccess: "Full Disk Access"
         }
     }
 
@@ -28,6 +31,8 @@ enum Permission: String, CaseIterable, Identifiable {
         case .calendar: "Show upcoming events and time-to-leave alerts."
         case .bluetooth: "Announce headphones as they connect, with battery."
         case .automation: "Read and control the track playing in Music and Spotify."
+        case .focus: "Show when a Focus turns on or off."
+        case .fullDiskAccess: "Name the Focus that’s on, custom ones too. Isola only reads the Focus database."
         }
     }
 
@@ -37,6 +42,8 @@ enum Permission: String, CaseIterable, Identifiable {
         case .calendar: "calendar"
         case .bluetooth: "airpodspro"
         case .automation: "music.note"
+        case .focus: "moon.fill"
+        case .fullDiskAccess: "internaldrive.fill"
         }
     }
 
@@ -46,6 +53,8 @@ enum Permission: String, CaseIterable, Identifiable {
         case .calendar: .red
         case .bluetooth: .indigo
         case .automation: .pink
+        case .focus: .purple
+        case .fullDiskAccess: .gray
         }
     }
 
@@ -55,6 +64,8 @@ enum Permission: String, CaseIterable, Identifiable {
         case .calendar: "Privacy_Calendars"
         case .bluetooth: "Privacy_Bluetooth"
         case .automation: "Privacy_Automation"
+        case .fullDiskAccess: "Privacy_AllFiles"
+        case .focus: ""  // see openSystemSettings()
         }
     }
 
@@ -80,6 +91,15 @@ enum Permission: String, CaseIterable, Identifiable {
             case OSStatus(errAEEventNotPermitted): return .denied
             default: return .notDetermined
             }
+        case .focus:
+            switch INFocusStatusCenter.default.authorizationStatus {
+            case .authorized: return .granted
+            case .notDetermined: return .notDetermined
+            default: return .denied
+            }
+        case .fullDiskAccess:
+            // Nothing to ask for: it is granted by hand in System Settings.
+            return FocusMonitor.canReadDatabase ? .granted : .denied
         }
     }
 
@@ -103,13 +123,20 @@ enum Permission: String, CaseIterable, Identifiable {
                 _ = Self.automationStatus(ask: true)
                 DispatchQueue.main.async(execute: done)
             }
+        case .focus:
+            INFocusStatusCenter.default.requestAuthorization { _ in DispatchQueue.main.async(execute: done) }
+        case .fullDiskAccess:
+            openSystemSettings()
+            done()
         }
     }
 
     func openSystemSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(settingsAnchor)") {
-            NSWorkspace.shared.open(url)
-        }
+        // Sharing Focus status is managed in Focus settings, not Privacy & Security.
+        let link = self == .focus
+            ? "x-apple.systempreferences:com.apple.Focus-Settings.extension"
+            : "x-apple.systempreferences:com.apple.preference.security?\(settingsAnchor)"
+        if let url = URL(string: link) { NSWorkspace.shared.open(url) }
     }
 
     private nonisolated static func automationStatus(ask: Bool) -> OSStatus {
@@ -149,7 +176,8 @@ final class OnboardingModel {
     var onFinish: () -> Void = {}
 
     func refresh() {
-        for p in Permission.allCases { statuses[p] = p.status() }
+        let fresh = Dictionary(uniqueKeysWithValues: Permission.allCases.map { ($0, $0.status()) })
+        if fresh != statuses { statuses = fresh }
     }
 
     func finish() {
@@ -174,7 +202,7 @@ struct OnboardingView: View {
             .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity)))
             footer
         }
-        .frame(width: 560, height: 460)
+        .frame(width: 560, height: 560)
         .animation(.interpolatingSpring(mass: 1, stiffness: 190, damping: 22), value: model.step)
     }
 
@@ -220,6 +248,14 @@ struct OnboardingView: View {
         .padding(.horizontal, 36)
         .padding(.top, 28)
         .frame(maxHeight: .infinity, alignment: .top)
+        .task {
+            // Grants made in System Settings (Accessibility, Full Disk Access) show up on their own.
+            guard !SystemModule.renderingGallery else { return }
+            while !Task.isCancelled {
+                model.refresh()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 
     private func permissionRow(_ permission: Permission) -> some View {
@@ -302,7 +338,7 @@ enum OnboardingWindow {
 
     static func makeWindow(model: OnboardingModel) -> NSWindow {
         let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 560),
             styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false
         )
         w.titlebarAppearsTransparent = true
