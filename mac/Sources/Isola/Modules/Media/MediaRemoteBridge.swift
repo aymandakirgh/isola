@@ -103,7 +103,9 @@ final class MediaRemoteBridge {
             s.artwork = artwork
             s.artworkID = artworkID
         }
-        latest = s.title.isEmpty && s.artist.isEmpty ? nil : s
+        // Media without metadata (a video, an untitled stream) still counts while it plays or has a length.
+        let untitled = s.title.isEmpty && s.artist.isEmpty
+        latest = untitled && !s.isPlaying && s.duration <= 0 ? nil : s
         onUpdate?()
     }
 }
