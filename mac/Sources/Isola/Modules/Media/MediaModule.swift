@@ -37,6 +37,7 @@ final class MediaPreferences {
     /// The volume row stays open when the player collapses and reopens.
     var keepVolumeOpen: Bool = load("media.keepVolumeOpen", false) { didSet { store.set(keepVolumeOpen, forKey: "media.keepVolumeOpen") } }
 
+    /// The wing shows this Focus instead of the spectrogram.
     func showsFocus(_ focus: FocusState) -> Bool {
         focusReplace && focus.active && (focusMode.isEmpty || focusMode == focus.name)
     }
@@ -154,8 +155,8 @@ final class MediaController {
         if SimulatedPlayer.shared.active, let app = simulatedApp { snapshot?.bundleID = app }
         lastSnapshot = snapshot
         // Media without a title or artist (a bare stream, an untagged video) still counts while its app plays it.
-        let untitled = snapshot.map { $0.title.isEmpty && $0.artist.isEmpty } ?? true
-        guard let s = snapshot, !untitled || (s.bundleID != nil && (s.isPlaying || s.duration > 0)), !excluded(s.bundleID) else { return clear() }
+        guard let s = snapshot, !(s.title.isEmpty && s.artist.isEmpty) || (s.bundleID != nil && (s.isPlaying || s.duration > 0)),
+              !excluded(s.bundleID) else { return clear() }
         let key = "\(s.title)\u{1f}\(s.artist)\u{1f}\(s.album)"
         let trackChanged = !lastTrackKey.isEmpty && key != lastTrackKey
         let wasPlaying = state.isPlaying
