@@ -272,6 +272,11 @@ private struct SpeedMenu: View {
     let ui: MediaUI
     static let rates: [Double] = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
+    /// Music and Spotify scripting has no rate control.
+    static var available: Bool {
+        if case .script = NowPlayingSources.shared.source { false } else { true }
+    }
+
     static func label(_ rate: Double) -> String {
         (rate == rate.rounded() ? String(Int(rate)) : String(format: "%g", rate)) + "×"
     }
@@ -288,7 +293,7 @@ private struct SpeedMenu: View {
         } else {
             Menu {
                 ForEach(Self.rates, id: \.self) { rate in
-                    Button(Self.label(rate)) { state.commands.setRate(rate) }
+                    Button(Self.label(rate)) { state.setRate(rate) }
                 }
             } label: { label }
                 .menuStyle(.borderlessButton)
@@ -352,7 +357,7 @@ struct ExpandedPlayer: View {
                 Spacer(minLength: 6)
                 HStack(spacing: 8) {
                     if let link = ui.link { CopyLinkButton(link: link) }
-                    SpeedMenu(state: state, ui: ui)
+                    if SpeedMenu.available { SpeedMenu(state: state, ui: ui) }
                     if ui.offscreen {
                         Image(systemName: "airplay.audio").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.ink.opacity(0.72))
                     } else {

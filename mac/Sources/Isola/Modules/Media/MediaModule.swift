@@ -85,7 +85,8 @@ final class MediaController {
         state.duration = s.duration
         state.elapsed = s.elapsed
         state.elapsedAt = s.timestamp
-        state.rate = s.rate > 0 ? s.rate : state.rate
+        // Sources report rate 0 while paused: keep the chosen speed until playback says otherwise.
+        if s.isPlaying || s.bundleID != state.sourceBundleID { state.rate = s.rate > 0 ? s.rate : 1 }
         state.shuffle = s.shuffle
         state.repeatMode = s.repeatMode
         state.sourceBundleID = s.bundleID

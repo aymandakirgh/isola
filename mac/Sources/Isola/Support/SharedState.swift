@@ -32,6 +32,14 @@ final class NowPlayingState {
         guard isPlaying else { return elapsed }
         return min(duration > 0 ? duration : .infinity, elapsed + date.timeIntervalSince(elapsedAt) * rate)
     }
+
+    /// Change speed; the label and the interpolated position follow before the source confirms.
+    func setRate(_ value: Double) {
+        elapsed = currentElapsed()
+        elapsedAt = Date()
+        rate = value
+        commands.setRate(value)
+    }
 }
 
 struct MediaCommands {
