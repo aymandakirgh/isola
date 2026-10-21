@@ -12,7 +12,7 @@ struct HUDPart: View {
     private var silent: Bool { s.kind == .volume && (s.muted || s.level <= 0) }
 
     /// Stretched toward the push (right at the top, left at the bottom) and a little thinner;
-    /// `amount` is the width gained at full stretch, so short and long bars move alike.
+    /// `amount` is the share of its width a bar gains at full stretch (more for the short one).
     private func rubberBand(_ bar: some View, amount: CGFloat) -> some View {
         bar.scaleEffect(x: 1 + amount * stretch, y: 1 - 0.3 * stretch, anchor: s.level >= 0.5 ? .leading : .trailing)
     }

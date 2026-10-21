@@ -232,7 +232,7 @@ enum HUDModule {
             if key == .volumeUp, SystemAudio.isMuted() { SystemAudio.setMuted(false) }
             SystemAudio.setVolume(level)
             showVolume(level: level, muted: SystemAudio.isMuted())
-            if level == current { rubberBand() }  // already at 0% or 100%
+            if level == current { rubberBand() }  // stepped() only stays put at 0% or 100%
             return true
         case .mute:
             if down {
@@ -252,7 +252,7 @@ enum HUDModule {
     }
 
     /// Pushing past 0% or 100% stretches the bar toward the push and lets it spring back,
-    /// only with the island's Overshoot on (`stepped` lands on the same level only there).
+    /// only with the island's Overshoot on.
     private static func rubberBand() {
         guard Preferences.shared.overshoot else { return }
         withAnimation(.easeOut(duration: 0.08)) { HUDModel.shared.stretch = 1 }
