@@ -12,6 +12,19 @@
   ],
   "headers": [
     {
+      "source": "/((?!api/|assets/|fonts/|images/|sounds/|videos/|downloads/|favicon).*)",
+      "headers": [
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "frame-ancestors 'none'"
+        }
+      ]
+    },
+    {
       "source": "/assets/(.*)",
       "headers": [
         {

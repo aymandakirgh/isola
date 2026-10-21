@@ -2,6 +2,7 @@
 // store and no mail. Run with `npm run test:api` (Node's own test runner, no Vercel credentials).
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { test, type TestContext } from "node:test";
 
 // Whatever this shell's environment holds, never reach a real Blob store or Resend, and use the
@@ -20,14 +21,17 @@ const {
   isValidKey,
   memory,
   withKey,
-  blobCall,
+  withDeadline,
 } = await import("../../api/license.ts");
 
-type Listed = { devices: { id: string; name: string; activated: string }[] };
+type Listed = {
+  devices: { id: string; name: string; activated: string; lastSeen: string }[];
+};
 type Reply = Listed & {
   key: string;
   email: string | null;
   error: string;
+  code?: string;
   mail: boolean;
 };
 const ids = (body: Listed) => body.devices.map((d) => d.id);
@@ -82,15 +86,39 @@ async function activateAll(key: string, names: string[]) {
 const versions = () =>
   new Map([...memory].map(([path, { etag }]) => [path, etag]));
 
+let rewrites = 0;
+/** Changes the stored licence for `key` behind the server's back: time passing, or an old record. */
+function rewrite(
+  key: string,
+  change: (license: { devices: Record<string, string>[] }) => void,
+) {
+  const path = `licenses/${sha256(key)}.json`;
+  const license = JSON.parse(memory.get(path)!.body);
+  change(license);
+  memory.set(path, {
+    body: JSON.stringify(license),
+    etag: `rewritten-${++rewrites}`,
+  });
+}
+/** A stored date, `days` ago. */
+const daysAgo = (days: number) =>
+  new Date(Date.now() - days * 86_400_000)
+    .toISOString()
+    .replace(/\.\d+Z$/, "Z");
+const justNow = (date: string) => Date.now() - Date.parse(date) < 60_000;
+
 /** Resend configured for this test, with fetch stubbed so nothing leaves the process. */
-function mailbox(t: TestContext) {
+function mailbox(
+  t: TestContext,
+  respond = async (_init?: RequestInit) => Response.json({ id: "stub" }),
+) {
   const sent: { url: string; init?: RequestInit }[] = [];
   t.mock.method(
     globalThis,
     "fetch",
     async (url: string | URL | Request, init?: RequestInit) => {
       sent.push({ url: String(url), init });
-      return Response.json({ id: "stub" });
+      return respond(init);
     },
   );
   process.env.RESEND_API_KEY = "re_test";
@@ -136,6 +164,11 @@ test("activate registers a Mac; activating it again writes nothing, even with a 
     first.body.devices[0].activated,
     /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/,
     "no fractional seconds",
+  );
+  assert.equal(
+    first.body.devices[0].lastSeen,
+    first.body.devices[0].activated,
+    "seen as it's activated",
   );
   const before = versions();
   const again = await call("activate", {
@@ -270,6 +303,7 @@ test("a Mac can remove itself or a Mac activated after it, never an earlier one"
     target: seen[0].id,
   });
   assert.equal(refused.status, 403);
+  assert.equal(refused.body.code, "order");
   assert.match(refused.body.error, /activated before it/);
   assert.equal(
     (await call("devices", { key, deviceId: mac("first").id })).body.devices
@@ -317,6 +351,135 @@ test("a Mac can remove itself or a Mac activated after it, never an earlier one"
   assert.equal(itself.status, 200);
   assert.equal(itself.body.devices.length, 1);
   assert.match(itself.body.devices[0].id, HANDLE, "it's off the list it gets");
+});
+
+test("activate and devices note when a Mac was last seen, writing at most once a day", async () => {
+  const key = await mint();
+  await activateAll(key, ["a", "b"]);
+  const before = versions();
+  await call("devices", { key, deviceId: mac("a").id });
+  await call("activate", { key, device: mac("a") });
+  assert.deepEqual(versions(), before, "seen again the same day: no write");
+
+  rewrite(key, (license) => {
+    license.devices[0].lastSeen = daysAgo(2);
+  });
+  const listed = await call("devices", { key, deviceId: mac("a").id });
+  assert.ok(
+    justNow(listed.body.devices[0].lastSeen),
+    "a day on, devices notes it",
+  );
+  assert.ok(justNow(listed.body.devices[0].activated), "activation stays");
+  const after = versions();
+  await call("devices", { key, deviceId: mac("a").id });
+  assert.deepEqual(versions(), after, "and not again that day");
+  rewrite(key, (license) => {
+    license.devices[0].lastSeen = daysAgo(2);
+  });
+  const activated = await call("activate", { key, device: mac("a") });
+  assert.ok(justNow(activated.body.devices[0].lastSeen), "so does activate");
+
+  // A record from before lastSeen: its activation date stands in, in the list too.
+  rewrite(key, (license) => {
+    delete license.devices[0].lastSeen;
+    license.devices[0].activated = daysAgo(3);
+  });
+  const asB = await call("devices", { key, deviceId: mac("b").id });
+  assert.equal(asB.body.devices[0].lastSeen, asB.body.devices[0].activated);
+  assert.ok(!justNow(asB.body.devices[0].lastSeen));
+});
+
+test("any Mac on the key can remove a Mac not seen for 30 days", async () => {
+  const key = await mint();
+  await activateAll(key, ["first", "second", "third"]);
+  const seen = (await call("devices", { key, deviceId: mac("third").id })).body
+    .devices;
+  const removeFirst = () =>
+    call("deactivate", {
+      key,
+      deviceId: mac("third").id,
+      target: seen[0].id,
+    });
+  rewrite(key, (license) => {
+    license.devices[0].lastSeen = daysAgo(29);
+  });
+  const refused = await removeFirst();
+  assert.equal(refused.status, 403, "29 days isn't long enough");
+  assert.equal(refused.body.code, "order");
+  rewrite(key, (license) => {
+    license.devices[0].lastSeen = daysAgo(31);
+  });
+  const removed = await removeFirst();
+  assert.equal(removed.status, 200);
+  assert.deepEqual(ids(removed.body), [seen[1].id, mac("third").id]);
+
+  // A record from before lastSeen goes by its activation date.
+  rewrite(key, (license) => {
+    delete license.devices[0].lastSeen;
+    license.devices[0].activated = daysAgo(40);
+  });
+  const old = await call("deactivate", {
+    key,
+    deviceId: mac("third").id,
+    target: seen[1].id,
+  });
+  assert.equal(old.status, 200);
+  assert.deepEqual(ids(old.body), [mac("third").id]);
+  assert.equal(
+    (await call("devices", { key, deviceId: mac("first").id })).body.code,
+    "not_on_key",
+    "the removed Mac hears it at its next sync",
+  );
+});
+
+test("every verdict on a licence carries a code, and nothing else does", async () => {
+  const key = await mint();
+  await activateAll(key, ["a", "b", "c"]);
+  const asC = (await call("devices", { key, deviceId: mac("c").id })).body
+    .devices;
+  const unminted = "ISOLA-W7UD-A389-NXLG";
+  for (const [reply, status, code] of [
+    [await call("devices", { key, deviceId: mac("z").id }), 403, "not_on_key"],
+    [
+      await call("deactivate", {
+        key,
+        deviceId: mac("z").id,
+        target: mac("z").id,
+      }),
+      403,
+      "not_on_key",
+    ],
+    [
+      await call("devices", { key: unminted, deviceId: mac("a").id }),
+      404,
+      "unknown_key",
+    ],
+    [
+      await call("activate", { key: unminted, device: mac("a") }),
+      404,
+      "unknown_key",
+    ],
+    [await call("activate", { key, device: mac("d") }), 409, "limit"],
+    [
+      await call("deactivate", {
+        key,
+        deviceId: mac("c").id,
+        target: asC[0].id,
+      }),
+      403,
+      "order",
+    ],
+  ] as const) {
+    assert.equal(reply.status, status, code);
+    assert.equal(reply.body.code, code);
+    assert.deepEqual(Object.keys(reply.body).sort(), ["code", "error"]);
+  }
+  for (const reply of [
+    await call("activate", { key: "ISOLA-NOPE", device: mac("a") }),
+    await call("devices", { key, deviceId: "x".repeat(101) }),
+    await call("nope", {}),
+  ])
+    assert.deepEqual(Object.keys(reply.body), ["error"], String(reply.status));
 });
 
 test("the shared demo key has no device limit and keeps no list", async () => {
@@ -421,33 +584,32 @@ test("mail goes out at most 3 times an hour per mailbox, +tags included", async 
   ]);
 });
 
-test("an address lists each key once, at most 20, and its index is rewritten only when that changes", async () => {
+test("an address lists each key once, the 20 most recent, and its index is rewritten only when that changes", async () => {
   assert.deepEqual(withKey(null, "K1"), { keys: ["K1"] });
   assert.equal(withKey({ keys: ["K1"] }, "K1"), undefined, "already there");
   assert.deepEqual(withKey({ keys: ["K1", "K1", "K2"] }, "K3"), {
     keys: ["K1", "K2", "K3"],
   });
   const twenty = Array.from({ length: 20 }, (_, i) => `K${i}`);
-  assert.equal(withKey({ keys: twenty }, "K20"), undefined, "full");
+  assert.deepEqual(
+    withKey({ keys: twenty }, "K20"),
+    { keys: [...twenty.slice(1), "K20"] },
+    "full: the oldest goes",
+  );
   assert.deepEqual(withKey({ keys: [...twenty, "K20"] }, "K21"), {
-    keys: twenty,
+    keys: [...twenty.slice(2), "K20", "K21"],
   });
 
   const email = "many@example.com";
   const keys: string[] = [];
-  for (let i = 0; i < 20; i++) keys.push(await mint(email));
-  const index = () =>
-    [...memory].find(
-      ([path, { body }]) =>
-        path.startsWith("emails/") && body.includes(keys[0]),
-    )!;
-  const [path, before] = index();
-  assert.deepEqual(JSON.parse(before.body), { keys });
-  await mint(email);
-  assert.equal(
-    memory.get(path)?.etag,
-    before.etag,
-    "the 21st key isn't indexed, and nothing is written",
+  for (let i = 0; i < 21; i++) keys.push(await mint(email));
+  const [, index] = [...memory].find(
+    ([path, { body }]) => path.startsWith("emails/") && body.includes(keys[20]),
+  )!;
+  assert.deepEqual(
+    JSON.parse(index.body),
+    { keys: keys.slice(1) },
+    "the 21st key pushes out the first",
   );
 });
 
@@ -509,7 +671,7 @@ test("LICENSE_SECRET keys the handles; production refuses to run without it", as
   }
 });
 
-test("throttles answer 503 with Retry-After, never 429: per network address and per key", async () => {
+test("throttles answer 503 with Retry-After, never 429: per network address, per key and per Mac", async () => {
   const from = "203.0.113.9";
   for (let i = 0; i < 5; i++)
     assert.equal((await call("demo", {}, from)).status, 201);
@@ -535,10 +697,20 @@ test("throttles answer 503 with Retry-After, never 429: per network address and 
   assert.ok(Number(busy.headers.get("retry-after")) > 0);
   assert.deepEqual(Object.keys(busy.body), ["error"]);
 
-  // ...and 60 an hour for one key, from anywhere.
+  // ...60 an hour for one key, from anywhere, for callers that aren't on it...
   const key = await mint();
-  await activateAll(key, ["a"]);
+  await activateAll(key, ["a"]); // not on the key yet: this one counts for the key
   for (let i = 1; i < 60; i++)
+    assert.equal(
+      (await call("devices", { key, deviceId: `stranger-${i}` })).status,
+      403,
+    );
+  const newcomer = await call("activate", { key, device: mac("b") });
+  assert.equal(newcomer.status, 503);
+  assert.ok(Number(newcomer.headers.get("retry-after")) > 0);
+
+  // ...and 60 an hour for each Mac on it, which nobody else uses up.
+  for (let i = 0; i < 60; i++)
     assert.equal(
       (await call("devices", { key, deviceId: mac("a").id })).status,
       200,
@@ -552,8 +724,32 @@ test("throttles answer 503 with Retry-After, never 429: per network address and 
     });
     assert.equal(status, 503, action);
     assert.ok(Number(headers.get("retry-after")) > 0);
-    assert.equal(body.error, "Too many requests. Please try again later.");
+    assert.deepEqual(body, {
+      error: "Too many requests. Please try again later.",
+    });
   }
+});
+
+test("an intruder with the key can't use up the first Mac's allowance and stay", async () => {
+  const key = await mint();
+  await activateAll(key, ["owner", "intruder"]);
+  // The intruder hammers the key as itself and under made-up ids, from everywhere...
+  for (let i = 0; i < 70; i++) {
+    await call("devices", { key, deviceId: mac("intruder").id });
+    await call("devices", { key, deviceId: `made-up-${i}` });
+  }
+  for (const deviceId of [mac("intruder").id, "made-up"])
+    assert.equal((await call("devices", { key, deviceId })).status, 503);
+  // ...and the first Mac still gets through, and removes it.
+  const listed = await call("devices", { key, deviceId: mac("owner").id });
+  assert.equal(listed.status, 200);
+  const removed = await call("deactivate", {
+    key,
+    deviceId: mac("owner").id,
+    target: listed.body.devices[1].id,
+  });
+  assert.equal(removed.status, 200);
+  assert.deepEqual(ids(removed.body), [mac("owner").id]);
 });
 
 test("every POST must be JSON, so a form on another site can't drive the API", async () => {
@@ -585,7 +781,7 @@ test("every POST must be JSON, so a form on another site can't drive the API", a
   assert.equal(preflight.headers.get("access-control-allow-origin"), null);
 });
 
-test("text must be well-formed, and long names are cut by code point", async () => {
+test("text must be well-formed and at most 1000 UTF-16 units; long names are cut by code point", async () => {
   const key = await mint();
   for (const device of [
     { ...mac("a"), name: "Mac \ud800" },
@@ -597,17 +793,82 @@ test("text must be well-formed, and long names are cut by code point", async () 
     (await call("devices", { key, deviceId: "\ud800" })).status,
     400,
   );
+  for (const device of [
+    { ...mac("a"), name: "x".repeat(1001) },
+    { ...mac("a"), model: "🍎".repeat(501) }, // 1002 UTF-16 units
+  ]) {
+    const refused = await call("activate", { key, device });
+    assert.equal(refused.status, 400);
+    assert.match(refused.body.error, /is too long/);
+  }
+  assert.equal(
+    (await call("recover", { email: `${"a".repeat(990)}@example.com` })).status,
+    400,
+  );
   const long = await call("activate", {
     key,
-    device: { ...mac("a"), name: "🍎".repeat(150) },
+    device: { ...mac("a"), name: "🍎".repeat(500) }, // 1000 units: cut, not refused
   });
   assert.equal(long.status, 200);
   assert.equal(long.body.devices[0].name, "🍎".repeat(100));
 });
 
+test("a Resend call that hangs is aborted at the same deadline as Blob calls", async (t) => {
+  await mint("slow@example.com");
+  const aborts: Error[] = [];
+  mailbox(
+    t,
+    (init) =>
+      new Promise((_, reject) =>
+        init?.signal?.addEventListener("abort", () => {
+          aborts.push(init.signal?.reason);
+          reject(init.signal?.reason);
+        }),
+      ),
+  );
+  // Also swallows the warning that mock timers are experimental.
+  const logged = t.mock.method(console, "error", () => {});
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const asked = await call("recover", { email: "slow@example.com" });
+  assert.equal(asked.status, 202);
+  await new Promise(setImmediate);
+  assert.equal(aborts.length, 0, "still waiting");
+  t.mock.timers.tick(8_000);
+  await new Promise(setImmediate);
+  assert.equal(aborts[0]?.name, "AbortError");
+  const failures = logged.mock.calls.filter(
+    (c) => c.arguments[0] === "license recovery failed:",
+  );
+  assert.equal(failures.length, 1, "logged, the reply long gone");
+});
+
+test("no page can be framed by another site (vercel.json)", async () => {
+  const config = JSON.parse(
+    await readFile(new URL("../../vercel.json", import.meta.url), "utf8"),
+  ) as {
+    headers: { source: string; headers: { key: string; value: string }[] }[];
+  };
+  const rule = config.headers.find((r) =>
+    r.headers.some((h) => h.key === "X-Frame-Options"),
+  )!;
+  assert.deepEqual(
+    Object.fromEntries(rule.headers.map((h) => [h.key, h.value])),
+    {
+      "X-Frame-Options": "DENY",
+      "Content-Security-Policy": "frame-ancestors 'none'",
+    },
+    "frame-ancestors only: a full CSP would break the pages' inline styles",
+  );
+  const pages = new RegExp(`^${rule.source}$`);
+  for (const path of ["/", "/faqs", "/privacy", "/recover", "/purchased/demo"])
+    assert.match(path, pages);
+  for (const path of ["/assets/index.js", "/fonts/nunito-digits.woff2"])
+    assert.doesNotMatch(path, pages);
+});
+
 test("a Blob call that hangs is aborted at its deadline, with an error the SDK won't retry", async () => {
   let reason: unknown;
-  const hung = blobCall(
+  const hung = withDeadline(
     (signal) =>
       new Promise((_, reject) =>
         signal.addEventListener("abort", () => {
@@ -622,7 +883,7 @@ test("a Blob call that hangs is aborted at its deadline, with an error the SDK w
     message: "The license server is busy. Please try again in a moment.",
   });
   assert.equal((reason as Error).name, "AbortError");
-  assert.equal(await blobCall(async () => "done", 20), "done");
+  assert.equal(await withDeadline(async () => "done", 20), "done");
 });
 
 test("a write that fails surfaces at once, and endless races end in a 503", async (t) => {

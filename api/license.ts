@@ -5,13 +5,15 @@
 //   POST /api/license/demo        {email?}                          → 201 {key, email}
 //   POST /api/license/activate    {key, device: {id, name, model}}  → 200 {devices}  (409 past 3 Macs)
 //   POST /api/license/devices     {key, deviceId}                   → 200 {devices}  (403 unless deviceId is on the key)
-//   POST /api/license/deactivate  {key, deviceId, target}           → 200 {devices}  (403 for a Mac activated before the caller)
+//   POST /api/license/deactivate  {key, deviceId, target}           → 200 {devices}  (403 for an earlier Mac seen in the last 30 days)
 //   POST /api/license/recover     {email}                           → 202 {mail}     (the same for every address)
 //
 // A Mac's id is its credential, so {devices} shows the caller its own id and every other Mac as an
-// opaque handle, which is what deactivate's `target` takes. Every POST must be JSON (415 otherwise).
-// Errors are {error} with a sentence the Mac app shows as is; a throttle is a 503 with Retry-After,
-// never a 429. Payments stay a no-charge demo.
+// opaque handle, which is what deactivate's `target` takes, each with when it was activated and last
+// seen (activate and devices note that, at most once a day). Every POST must be JSON (415 otherwise).
+// Errors are {error} with a sentence the Mac app shows as is; a verdict on the licence adds its
+// `code`: "not_on_key" (403), "unknown_key" (404), "limit" (409) or "order" (403), and the app acts
+// on nothing else. A throttle is a 503 with Retry-After, never a 429. Payments stay a no-charge demo.
 import { createHash, createHmac, randomInt } from "node:crypto";
 import { BlobError, BlobPreconditionFailedError, get, put } from "@vercel/blob";
 import { waitUntil } from "@vercel/functions";
@@ -33,6 +35,7 @@ const EMAIL = new RegExp(
   "i",
 );
 const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
 /** Keys the HMACs (device handles, e-mail index names) when LICENSE_SECRET isn't set: tests and local
  *  runs only, since it's public and protects nothing. Production refuses to run without the real one. */
 const DEV_SECRET = "isola-dev-secret";
@@ -40,14 +43,24 @@ const NOT_SET_UP =
   "The license server isn’t set up yet. Please try again later.";
 const BUSY = "The license server is busy. Please try again in a moment.";
 
-type Device = { id: string; name: string; model: string; activated: string };
+/** `lastSeen` is missing from records written before it: `activated` stands in. */
+type Device = {
+  id: string;
+  name: string;
+  model: string;
+  activated: string;
+  lastSeen?: string;
+};
 type License = { key: string; created: string; devices: Device[] };
 type EmailIndex = { keys: string[] };
 type Body = Record<string, unknown>;
+type Verdict = "not_on_key" | "unknown_key" | "limit" | "order";
 
 class HttpError extends Error {
   status: number;
   headers?: Record<string, string>;
+  /** Set on a verdict on the licence: the only errors the Mac app acts on. */
+  code?: Verdict;
   constructor(
     status: number,
     message: string,
@@ -58,6 +71,9 @@ class HttpError extends Error {
     this.headers = headers;
   }
 }
+
+const verdict = (status: number, code: Verdict, message: string) =>
+  Object.assign(new HttpError(status, message), { code });
 
 // MARK: Keys: ISOLA-XXXX-XXXX-XXXX, the last character a weighted checksum of the other eleven.
 
@@ -125,7 +141,7 @@ const handle = (key: string, id: string) =>
 export const memory = new Map<string, { body: string; etag: string }>();
 let version = 0;
 const WRITE_TRIES = 5;
-const BLOB_DEADLINE = 8_000;
+const DEADLINE = 8_000;
 
 function blobConfigured() {
   // The SDK signs in with OIDC + BLOB_STORE_ID (a store connected to the project) or BLOB_READ_WRITE_TOKEN.
@@ -137,13 +153,13 @@ function blobConfigured() {
   return false;
 }
 
-/** One Blob SDK call with a deadline. The SDK retries 5xx and network errors itself (10 times by
- *  default, backing off), which could hold a request for minutes: at the deadline the call is
- *  aborted and the request answers 503. With an AbortError, which the SDK never retries; the
+/** One Blob SDK or Resend call with a deadline. The Blob SDK retries 5xx and network errors itself
+ *  (10 times by default, backing off), which could hold a request for minutes: at the deadline the
+ *  call is aborted and fails with a 503. With an AbortError, which the SDK never retries; the
  *  TimeoutError of AbortSignal.timeout() it would. */
-export async function blobCall<T>(
+export async function withDeadline<T>(
   call: (abortSignal: AbortSignal) => Promise<T>,
-  ms = BLOB_DEADLINE,
+  ms = DEADLINE,
 ): Promise<T> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -171,7 +187,7 @@ async function load<T>(
   }
   // useCache: false reads the latest write, not a CDN copy up to 60 s old:
   // https://vercel.com/docs/vercel-blob/private-storage#consistent-reads
-  return blobCall(async (abortSignal) => {
+  return withDeadline(async (abortSignal) => {
     const result = await get(path, {
       access: "private",
       useCache: false,
@@ -195,7 +211,7 @@ async function save(path: string, value: unknown, etag: string | null) {
     return;
   }
   // A new object keeps allowOverwrite at its default (false); ifMatch implies it for an update.
-  await blobCall((abortSignal) =>
+  await withDeadline((abortSignal) =>
     put(path, body, {
       access: "private",
       contentType: "application/json",
@@ -237,13 +253,20 @@ const emailPath = (email: string) =>
 /** ISO 8601 without fractional seconds, which the Mac app's JSONDecoder (.iso8601) reads. */
 const now = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
 
-/** Applies `change` to the licence for `key`; 404 when there is none. */
+/** Applies `change` to the licence for `key` (404 when there is none) for the Mac `deviceId`, once
+ *  it passes the throttle: counted at the first read alone, so a lost race doesn't count twice. */
 async function changeLicense(
+  request: Request,
   key: string,
+  deviceId: string,
   change: (license: License) => License | undefined,
 ) {
+  let counted = false;
   const license = await update<License>(licensePath(key), (current) => {
-    if (!current) throw new HttpError(404, "That license key doesn’t exist.");
+    if (!counted) limitMac(request, key, current, deviceId);
+    counted = true;
+    if (!current)
+      throw verdict(404, "unknown_key", "That license key doesn’t exist.");
     const next = change(current);
     // Spelled out, so an old record's `email` goes with this write.
     return (
@@ -257,21 +280,42 @@ async function changeLicense(
 function position(license: License, deviceId: string) {
   const at = license.devices.findIndex((d) => d.id === deviceId);
   if (at === -1)
-    throw new HttpError(403, "This Mac isn’t activated with that license.");
+    throw verdict(
+      403,
+      "not_on_key",
+      "This Mac isn’t activated with that license.",
+    );
   return at;
+}
+
+const lastSeen = (d: Device) => d.lastSeen ?? d.activated;
+/** Not seen for 30 days: any Mac on the key may remove it, so a Mac that's gone doesn't keep its slot. */
+const stale = (d: Device) => Date.now() - Date.parse(lastSeen(d)) > 30 * DAY;
+
+/** The licence with the Mac at `at` seen now; undefined (no write) when it was seen in the last 24
+ *  hours, so a Mac's calls write at most once a day. */
+function seen(license: License, at: number) {
+  const device = license.devices[at];
+  if (Date.now() - Date.parse(lastSeen(device)) < DAY) return undefined;
+  return {
+    ...license,
+    devices: license.devices.with(at, { ...device, lastSeen: now() }),
+  };
 }
 
 /** The key's Macs as `self` sees them: itself under its own id, every other Mac under a handle. */
 const listFor = (key: string, license: License, self: string) =>
-  license.devices.map((d) =>
-    d.id === self ? d : { ...d, id: handle(key, d.id) },
-  );
+  license.devices.map((d) => ({
+    ...d,
+    id: d.id === self ? d.id : handle(key, d.id),
+    lastSeen: lastSeen(d),
+  }));
 
-/** The index with `key` added: once, and only while it lists fewer than 20 keys (checkout doesn't
- *  verify addresses, so anyone can name anyone's; the first keys stay). undefined when nothing
- *  changes, so there's nothing to write. */
+/** The index with `key` added once, keeping the 20 most recent keys: checkout doesn't verify
+ *  addresses, so anyone can name anyone's, and this way a buyer's newest key is always there.
+ *  undefined when nothing changes, so there's nothing to write. */
 export function withKey(index: EmailIndex | null, key: string) {
-  const keys = [...new Set([...(index?.keys ?? []), key])].slice(0, EMAIL_KEYS);
+  const keys = [...new Set([...(index?.keys ?? []), key])].slice(-EMAIL_KEYS);
   return index && keys.join() === index.keys.join() ? undefined : { keys };
 }
 
@@ -279,11 +323,14 @@ export function withKey(index: EmailIndex | null, key: string) {
 // ponytail: counts live in this instance's memory, so every cap is per instance and resets on a cold
 // start: N warm instances let N times as much through. Going global: a Vercel WAF rate-limit rule
 // on /api/license/ for the per-address caps (https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting)
-// and @vercel/firewall's checkRateLimit with the key as rateLimitKey for the per-key one. The WAF's
-// own 429 is safe for the Mac app, which takes nothing but this server's JSON as a verdict.
+// and @vercel/firewall's checkRateLimit with the key (or key and Mac) as rateLimitKey for the others.
+// The WAF's own 429 is safe for the Mac app, which takes nothing but this server's verdicts. Telling
+// a Mac on the key from anyone else takes reading the licence, so a throttled caller still costs a read.
 
 const hits = new Map<string, { count: number; reset: number }>();
-/** activate, devices and deactivate, an hour: per network address, and per key. */
+/** activate, devices and deactivate, an hour: per Mac on the key; for any other caller, per network
+ *  address and per key. */
+const MAC_CALLS_PER_MAC = 60;
 const MAC_CALLS_PER_IP = 120;
 const MAC_CALLS_PER_KEY = 60;
 
@@ -310,7 +357,17 @@ function limit(bucket: string, max: number) {
     });
 }
 
-function limitMac(request: Request, key: string) {
+/** A Mac on the key draws on an allowance of its own, which nobody else can use up: an intruder with
+ *  the key can't stop the first Mac from removing it. Any other caller (a new Mac, someone trying
+ *  ids, a key that doesn't exist) counts per network address and per key. */
+function limitMac(
+  request: Request,
+  key: string,
+  license: License | null,
+  deviceId: string,
+) {
+  if (license?.devices.some((d) => d.id === deviceId))
+    return limit(`device:${key}:${deviceId}`, MAC_CALLS_PER_MAC);
   limit(`mac:${clientIp(request)}`, MAC_CALLS_PER_IP);
   // Everyone shares the demo key, and it stores nothing.
   if (key !== DEMO_KEY) limit(`key:${key}`, MAC_CALLS_PER_KEY);
@@ -326,6 +383,9 @@ const clientIp = (request: Request) =>
 // MARK: Input
 
 function text(value: unknown, name: string) {
+  // Before anything walks it (trim, the code points of clip): a body can hold megabytes.
+  if (typeof value === "string" && value.length > 1000)
+    throw new HttpError(400, `"${name}" is too long.`);
   if (typeof value !== "string" || !value.trim())
     throw new HttpError(400, `Missing "${name}".`);
   // A lone surrogate is no text: it can't be stored or shown as it was sent.
@@ -392,21 +452,29 @@ async function demo(body: Body, request: Request) {
 async function activate(body: Body, request: Request) {
   const key = keyOf(body);
   const device = deviceOf(body.device);
-  limitMac(request, key);
   // The shared demo key stores no list, so one visitor never sees another's Macs.
-  if (key === DEMO_KEY)
-    return json({ devices: [{ ...device, activated: now() }] });
-  const license = await changeLicense(key, (license) => {
-    // A Mac already on the key just gets the list: a new name or model isn't worth a write.
-    if (license.devices.some((d) => d.id === device.id)) return undefined;
+  if (key === DEMO_KEY) {
+    limitMac(request, key, null, device.id);
+    const time = now();
+    return json({ devices: [{ ...device, activated: time, lastSeen: time }] });
+  }
+  const license = await changeLicense(request, key, device.id, (license) => {
+    const at = license.devices.findIndex((d) => d.id === device.id);
+    // A Mac already on the key is only seen again: a new name or model isn't worth a write.
+    if (at !== -1) return seen(license, at);
     if (license.devices.length >= DEVICE_LIMIT)
-      throw new HttpError(
+      throw verdict(
         409,
+        "limit",
         `This license is already active on ${DEVICE_LIMIT} Macs. Deactivate one first.`,
       );
+    const time = now();
     return {
       ...license,
-      devices: [...license.devices, { ...device, activated: now() }],
+      devices: [
+        ...license.devices,
+        { ...device, activated: time, lastSeen: time },
+      ],
     };
   });
   return json({ devices: listFor(key, license, device.id) });
@@ -415,33 +483,39 @@ async function activate(body: Body, request: Request) {
 async function devices(body: Body, request: Request) {
   const key = keyOf(body);
   const deviceId = id(body.deviceId, "deviceId");
-  limitMac(request, key);
-  if (key === DEMO_KEY) return json({ devices: [] });
-  const license = (await load<License>(licensePath(key)))?.value;
-  if (!license) throw new HttpError(404, "That license key doesn’t exist.");
-  position(license, deviceId);
+  if (key === DEMO_KEY) {
+    limitMac(request, key, null, deviceId);
+    return json({ devices: [] });
+  }
+  const license = await changeLicense(request, key, deviceId, (license) =>
+    seen(license, position(license, deviceId)),
+  );
   return json({ devices: listFor(key, license, deviceId) });
 }
 
-/** A Mac removes itself (`target` is its own id) or a Mac activated after it (`target` is that Mac's
- *  handle): never an earlier one, so the first Mac on a key can always remove an intruder. */
+/** A Mac removes itself (`target` is its own id), a Mac activated after it, or one not seen for 30
+ *  days (`target` is that Mac's handle): never an earlier Mac still in use, so the first Mac on a
+ *  key can always remove an intruder. */
 async function deactivate(body: Body, request: Request) {
   const key = keyOf(body);
   const deviceId = id(body.deviceId, "deviceId");
   const target = id(body.target, "target");
-  limitMac(request, key);
-  if (key === DEMO_KEY) return json({ devices: [] });
-  const license = await changeLicense(key, (license) => {
+  if (key === DEMO_KEY) {
+    limitMac(request, key, null, deviceId);
+    return json({ devices: [] });
+  }
+  const license = await changeLicense(request, key, deviceId, (license) => {
     const self = position(license, deviceId);
     const at =
       target === deviceId
         ? self
         : license.devices.findIndex((d) => handle(key, d.id) === target);
     if (at === -1) return undefined; // gone already
-    if (at < self)
-      throw new HttpError(
+    if (at < self && !stale(license.devices[at]))
+      throw verdict(
         403,
-        "This Mac can’t remove a Mac that was activated before it. Deactivate it on that Mac, or from an earlier one.",
+        "order",
+        "This Mac can’t remove a Mac that was activated before it, unless that Mac hasn’t been seen for 30 days. Deactivate it on that Mac, or from an earlier one.",
       );
     return {
       ...license,
@@ -479,35 +553,38 @@ async function sendLicenses(email: string) {
   const keys = (await load<EmailIndex>(emailPath(email)))?.value.keys ?? [];
   if (!keys.length) return;
   const many = keys.length > 1;
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      // Resend refuses requests without one (403, error 1010): https://resend.com/docs/knowledge-base/403-error-1010
-      "User-Agent": "isola-license-server/1.0",
-    },
-    body: JSON.stringify({
-      from,
-      to: [email],
-      subject: many ? "Your Isola licenses" : "Your Isola license",
-      text: [
-        many
-          ? "Here are the Isola licenses for this address:"
-          : "Here is your Isola license:",
-        "",
-        ...keys,
-        "",
-        `In Isola, open Settings › License, paste the key and click Activate. A license works on up to ${DEVICE_LIMIT} Macs.`,
-        "",
-        "Didn’t ask for this? You can ignore this e-mail.",
-      ].join("\n"),
-    }),
+  await withDeadline(async (signal) => {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        // Resend refuses requests without one (403, error 1010): https://resend.com/docs/knowledge-base/403-error-1010
+        "User-Agent": "isola-license-server/1.0",
+      },
+      body: JSON.stringify({
+        from,
+        to: [email],
+        subject: many ? "Your Isola licenses" : "Your Isola license",
+        text: [
+          many
+            ? "Here are the Isola licenses for this address:"
+            : "Here is your Isola license:",
+          "",
+          ...keys,
+          "",
+          `In Isola, open Settings › License, paste the key and click Activate. A license works on up to ${DEVICE_LIMIT} Macs.`,
+          "",
+          "Didn’t ask for this? You can ignore this e-mail.",
+        ].join("\n"),
+      }),
+      signal,
+    });
+    if (!response.ok)
+      throw new Error(
+        `Resend answered ${response.status}: ${await response.text()}`,
+      );
   });
-  if (!response.ok)
-    throw new Error(
-      `Resend answered ${response.status}: ${await response.text()}`,
-    );
 }
 
 const routes: Record<
@@ -551,7 +628,11 @@ export default {
       return await routes[action](body as Body, request);
     } catch (error) {
       if (error instanceof HttpError)
-        return json({ error: error.message }, error.status, error.headers);
+        return json(
+          { error: error.message, code: error.code }, // no code: no `code` in the JSON
+          error.status,
+          error.headers,
+        );
       console.error(error);
       return json({ error: "Something went wrong. Please try again." }, 500);
     }
