@@ -745,7 +745,7 @@ struct MediaSettingsView: View {
                     }
                 } label: {
                     Text(spotify.status)
-                    Text("For likes, explicit tags, repeat one and podcasts: create an app at developer.spotify.com (Web API), add the redirect URI above, paste its Client ID.")
+                    Text("For likes, explicit tags, repeat one and podcasts: create an app at [developer.spotify.com](https://developer.spotify.com/dashboard) (Web API), add the redirect URI above, paste its Client ID.")
                 }
             }
             Section("Source") {
