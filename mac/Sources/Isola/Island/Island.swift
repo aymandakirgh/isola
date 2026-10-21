@@ -123,7 +123,13 @@ final class Island {
     }
 
     func setHovering(_ on: Bool) {
-        guard on != hovering, !peeking else { return }
+        guard on != hovering else { return }
+        if let item = current, item.peekOnHover, item.peek != nil, !expanded {
+            hovering = on
+            quickPeek(on)
+            return
+        }
+        guard !peeking else { return }
         withAnimation(on ? Springs.hoverIn : Springs.hoverOut) { hovering = on && !expanded }
         hoverExpandTimer?.invalidate()
         let delay = Preferences.shared.hoverExpandDelay

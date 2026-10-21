@@ -16,6 +16,8 @@ struct IslandItem: Identifiable {
     /// Shown under the notch while quick-peeking (or always, if `alwaysPeek`).
     var peek: AnyView?
     var alwaysPeek = false
+    /// Hovering the island quick-peeks instead of lifting it (media: hover the artwork, see the title).
+    var peekOnHover = false
     /// Full panel when the island is expanded.
     var expanded: AnyView?
     var expandedSize = CGSize(width: 400, height: 180)
@@ -39,10 +41,11 @@ struct IslandItem: Identifiable {
         self.trailing = AnyView(trailing())
     }
 
-    func peek<V: View>(always: Bool = false, @ViewBuilder _ view: () -> V) -> IslandItem {
+    func peek<V: View>(always: Bool = false, onHover: Bool = false, @ViewBuilder _ view: () -> V) -> IslandItem {
         var copy = self
         copy.peek = AnyView(view())
         copy.alwaysPeek = always
+        copy.peekOnHover = onHover
         return copy
     }
 
