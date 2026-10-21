@@ -19,6 +19,8 @@ final class FocusMonitor {
 
     /// On/off from INFocusStatusCenter alone: which Focus is unknown.
     nonisolated static let genericID = "focus"
+    /// System Settings › Focus (also where sharing Focus status is managed).
+    nonisolated static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.Focus-Settings.extension")!
 
     private(set) var current: Mode?
     private var timer: Timer?
@@ -177,6 +179,7 @@ enum FocusItems {
                 PeekLabel(mode.title)
             }
         }
+        .onOptionTap { NSWorkspace.shared.open(FocusMonitor.settingsURL) }
     }
 }
 

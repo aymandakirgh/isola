@@ -56,6 +56,8 @@ final class PowerState {
     /// Minutes, nil when unknown.
     var timeToFull: Int?
     var timeToEmpty: Int?
+    /// The connected power adapter's rating, when it reports one.
+    var adapterWatts: Int?
 }
 
 struct ConnectedDevice: Identifiable, Equatable {

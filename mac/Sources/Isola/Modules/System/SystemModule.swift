@@ -124,6 +124,7 @@ enum SystemModule {
             Gallery.island("system-charger-off-\(suffix)", item: PowerItems.charger(connected: false, level: 0.62), geometry: g)
             Gallery.island("system-charging-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72), geometry: g)
             Gallery.island("system-charging-peek-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72), peeking: true, geometry: g)
+            Gallery.island("system-charging-details-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72, watts: 96, details: true), peeking: true, geometry: g)
             Gallery.island("system-low-battery-\(suffix)", item: PowerItems.lowBattery(level: 0.18), geometry: g)
             Gallery.island("system-low-power-on-\(suffix)", item: PowerItems.lowPower(on: true), geometry: g)
             Gallery.island("system-low-power-off-\(suffix)", item: PowerItems.lowPower(on: false), geometry: g)

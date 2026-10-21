@@ -14,6 +14,7 @@ final class PowerMonitor {
         var plugged = true
         var toFull: Int?
         var toEmpty: Int?
+        var watts: Int?
     }
 
     private var source: CFRunLoopSource?
@@ -45,13 +46,15 @@ final class PowerMonitor {
             let current = d[kIOPSCurrentCapacityKey] as? Double ?? 0
             let max = d[kIOPSMaxCapacityKey] as? Double ?? 100
             let minutes = { (key: String) -> Int? in (d[key] as? Int).flatMap { $0 > 0 ? $0 : nil } }
+            let adapter = IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any]
             return Reading(
                 hasBattery: true,
                 level: max > 0 ? min(1, current / max) : 0,
                 charging: d[kIOPSIsChargingKey] as? Bool ?? false,
                 plugged: d[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue,
                 toFull: minutes(kIOPSTimeToFullChargeKey),
-                toEmpty: minutes(kIOPSTimeToEmptyKey)
+                toEmpty: minutes(kIOPSTimeToEmptyKey),
+                watts: adapter?[kIOPSPowerAdapterWattsKey] as? Int
             )
         }
         return Reading()  // desktop Mac: always on AC, no battery
@@ -65,6 +68,7 @@ final class PowerMonitor {
         s.pluggedIn = r.plugged
         s.timeToFull = r.toFull
         s.timeToEmpty = r.toEmpty
+        s.adapterWatts = r.watts
         defer { lastPlugged = r.plugged; syncActivity() }
         guard r.hasBattery else { return }
         let prefs = SystemPreferences.shared
@@ -156,15 +160,27 @@ enum PowerItems {
         .peek(always: true) { PeekLabel("Low Power Mode") }
     }
 
-    /// Live activity; `level`/`minutesToFull` override the live PowerState (gallery snapshots).
-    @MainActor static func chargingActivity(level: Double? = nil, minutesToFull: Int? = nil) -> IslandItem {
+    /// Live activity; `level`/`minutesToFull`/`watts`/`details` override the live state
+    /// (gallery snapshots). Option-click switches its peek between time to full and details.
+    @MainActor static func chargingActivity(level: Double? = nil, minutesToFull: Int? = nil, watts: Int? = nil, details: Bool? = nil) -> IslandItem {
         IslandItem(id: activityID, kind: .liveActivity, priority: 10) {
             Image(systemName: "bolt.fill").islandSymbol(15).foregroundStyle(Palette.green).padding(.leading, 12)
         } trailing: {
             ChargingRing(level: level).padding(.trailing, 10)
         }
-        .peek(onHover: true) { ChargingPeek(level: level, minutesToFull: minutesToFull) }
+        .peek(onHover: true) { ChargingPeek(level: level, minutesToFull: minutesToFull, watts: watts, details: details) }
+        .onOptionTap {
+            ChargingDetails.shared.shown.toggle()
+            Island.shared.quickPeek(true, for: 4)
+        }
     }
+}
+
+/// Whether the charging peek shows battery details rather than time to full.
+@MainActor @Observable
+final class ChargingDetails {
+    static let shared = ChargingDetails()
+    var shown = false
 }
 
 private struct ChargingRing: View {
@@ -175,11 +191,18 @@ private struct ChargingRing: View {
 private struct ChargingPeek: View {
     var level: Double?
     var minutesToFull: Int?
+    var watts: Int?
+    var details: Bool?
     var body: some View {
         let s = PowerState.shared
         let l = level ?? s.level
         let m = level == nil ? s.timeToFull : minutesToFull
-        PeekLabel(l >= 0.995 ? "Charged · 100%" : m.map { "Full in \(PowerItems.minutes($0))" } ?? "Charging · \(PowerItems.percent(l))")
+        if details ?? ChargingDetails.shared.shown {
+            // The level and the adapter charging it ("46% · 96 W adapter").
+            PeekLabel("\(PowerItems.percent(l)) · " + ((level == nil ? s.adapterWatts : watts).map { "\($0) W adapter" } ?? "Charging"))
+        } else {
+            PeekLabel(l >= 0.995 ? "Charged · 100%" : m.map { "Full in \(PowerItems.minutes($0))" } ?? "Charging · \(PowerItems.percent(l))")
+        }
     }
 }
 

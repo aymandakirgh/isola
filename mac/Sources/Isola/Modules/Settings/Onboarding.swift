@@ -133,10 +133,8 @@ enum Permission: String, CaseIterable, Identifiable {
 
     func openSystemSettings() {
         // Sharing Focus status is managed in Focus settings, not Privacy & Security.
-        let link = self == .focus
-            ? "x-apple.systempreferences:com.apple.Focus-Settings.extension"
-            : "x-apple.systempreferences:com.apple.preference.security?\(settingsAnchor)"
-        if let url = URL(string: link) { NSWorkspace.shared.open(url) }
+        let url = self == .focus ? FocusMonitor.settingsURL : URL(string: "x-apple.systempreferences:com.apple.preference.security?\(settingsAnchor)")
+        if let url { NSWorkspace.shared.open(url) }
     }
 
     private nonisolated static func automationStatus(ask: Bool) -> OSStatus {
