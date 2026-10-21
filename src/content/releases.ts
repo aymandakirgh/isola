@@ -13,14 +13,14 @@ export const RELEASES: Record<"trial" | "stable", Release> = {
     version: "1.4.7",
     build: 151,
     published_at: "2026-10-09T16:12:00.000Z",
-    assets: [{ name: "Isola.dmg", size_bytes: 3_821_069 }],
+    assets: [{ name: "Isola.dmg", size_bytes: 4_545_914 }],
     minimum_system_version: "15",
   },
   stable: {
     version: "1.4.7",
     build: 151,
     published_at: "2026-10-09T16:12:00.000Z",
-    assets: [{ name: "Isola.dmg", size_bytes: 3_821_069 }],
+    assets: [{ name: "Isola.dmg", size_bytes: 4_545_914 }],
     minimum_system_version: "15 Sequoia",
   },
 };
