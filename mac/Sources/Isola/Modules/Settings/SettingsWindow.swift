@@ -205,10 +205,16 @@ struct GeneralPage: View {
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Section("Appearance") {
+            Section {
                 Picker("Outline", selection: $prefs.outline) {
                     ForEach(OutlineStyle.allCases) { Text($0.title).tag($0) }
                 }
+            } header: {
+                Text("Appearance")
+            } footer: {
+                Text("Colored takes the playing artwork's colours, Compact draws a hairline only while the island is compact, and Contrast adds a brighter edge for dark wallpapers.")
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .formStyle(.grouped)

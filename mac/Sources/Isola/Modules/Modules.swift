@@ -75,9 +75,15 @@ enum CoreDemo {
         let music = MediaActivity.item(state: SimulatedPlayer.sampleState(index: 0, playing: true), ui: ui)
         let timer = CalendarItems.timer(snapshot: TimerSnapshot(end: Date().addingTimeInterval(252), duration: 300))
         for (suffix, g) in [("pill", NotchGeometry.pillPreview), ("notch", NotchGeometry.notchPreview)] {
-            // Duo mode, with the timer in the bubble.
+            // Outline styles (over a dark wallpaper), and duo mode with the timer in the bubble.
+            Gallery.island("core-outline-colored-\(suffix)", item: music, outline: .colored, geometry: g)
+            Gallery.island("core-outline-compact-\(suffix)", item: item(), outline: .compact, geometry: g)
+            Gallery.island("core-outline-contrast-\(suffix)", item: item(), outline: .contrast, geometry: g)
             Gallery.island("core-duo-\(suffix)", item: music, secondary: timer, geometry: g)
         }
+        Gallery.island("core-outline-compact-expanded", item: item(), expanded: true, outline: .compact)
+        Gallery.island("core-outline-contrast-expanded", item: music, expanded: true, outline: .contrast, geometry: .notchPreview)
+        Gallery.island("core-duo-outline", item: music, secondary: timer, outline: .contrast, geometry: .notchPreview)
         // Whole General and Island pages (the settings window crops them).
         Gallery.add("core-general-settings", size: CGSize(width: 520, height: 1010)) {
             GeneralPage(nav: SettingsNav()).background(Color(nsColor: .windowBackgroundColor))

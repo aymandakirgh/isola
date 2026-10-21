@@ -25,18 +25,22 @@ enum Gallery {
     }
 
     /// The island in a given state over a wallpaper-like strip, as it sits under the menu bar.
+    /// Outline shots use a dark wallpaper, where outlines matter.
     static func island(
         _ name: String, item: IslandItem?, secondary: IslandItem? = nil, expanded: Bool = false, peeking: Bool = false,
-        hovering: Bool = false, geometry g: NotchGeometry = .pillPreview
+        hovering: Bool = false, outline: OutlineStyle = .none, geometry g: NotchGeometry = .pillPreview
     ) {
         let state = IslandState(item: item, secondary: secondary, expanded: expanded, peeking: peeking, hovering: hovering)
         let size = Island.size(for: state, in: g)
         let radii = Island.radii(for: state, in: g)
         let canvas = CGSize(width: max(size.width + 120, 420), height: size.height + g.topMargin + 40)
+        let wallpaper = outline == .none
+            ? [Color(red: 0.25, green: 0.2, blue: 0.62), Color(red: 0.42, green: 0.24, blue: 0.7)]
+            : [Color(red: 0.05, green: 0.05, blue: 0.08), Color(red: 0.11, green: 0.1, blue: 0.16)]
         add(name, size: canvas) {
             ZStack(alignment: .top) {
-                LinearGradient(colors: [Color(red: 0.25, green: 0.2, blue: 0.62), Color(red: 0.42, green: 0.24, blue: 0.7)], startPoint: .top, endPoint: .bottom)
-                IslandBody(state: state, size: size, radii: radii, geometry: g)
+                LinearGradient(colors: wallpaper, startPoint: .top, endPoint: .bottom)
+                IslandBody(state: state, size: size, radii: radii, geometry: g, outline: outline)
                     .scaleEffect(hovering ? 1.075 : 1, anchor: .top)
                     .padding(.top, g.topMargin)
             }

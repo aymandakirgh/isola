@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// Rounded rect with independent top/bottom continuous corners (animatable).
-struct IslandShape: Shape {
+/// Rounded rect with independent top/bottom continuous corners (animatable; insettable so
+/// outlines can sit just inside the edge).
+struct IslandShape: InsettableShape {
     var top: CGFloat
     var bottom: CGFloat
+    var inset: CGFloat = 0
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(top, bottom) }
@@ -12,9 +14,15 @@ struct IslandShape: Shape {
 
     func path(in rect: CGRect) -> Path {
         UnevenRoundedRectangle(
-            topLeadingRadius: top, bottomLeadingRadius: bottom,
-            bottomTrailingRadius: bottom, topTrailingRadius: top, style: .continuous
-        ).path(in: rect)
+            topLeadingRadius: max(0, top - inset), bottomLeadingRadius: max(0, bottom - inset),
+            bottomTrailingRadius: max(0, bottom - inset), topTrailingRadius: max(0, top - inset), style: .continuous
+        ).path(in: rect.insetBy(dx: inset, dy: inset))
+    }
+
+    func inset(by amount: CGFloat) -> IslandShape {
+        var copy = self
+        copy.inset += amount
+        return copy
     }
 }
 
@@ -93,6 +101,7 @@ struct IslandBody: View {
     let size: CGSize
     let radii: (top: CGFloat, bottom: CGFloat)
     let geometry: NotchGeometry
+    var outline: OutlineStyle = .none
 
     var body: some View {
         let g = geometry
@@ -102,11 +111,14 @@ struct IslandBody: View {
             content
                 .frame(width: size.width, height: size.height, alignment: .top)
                 .clipShape(IslandShape(top: radii.top, bottom: radii.bottom))
+            IslandOutline(style: outline, item: state.item, shape: IslandShape(top: radii.top, bottom: radii.bottom), compact: !state.expanded)
+                // Flush with the top edge, the outline fades out where the island meets the bezel.
+                .mask(TopFade(length: g.attached ? g.height * 0.4 : 0))
         }
         .frame(width: size.width, height: size.height)
         .overlay(alignment: .topTrailing) {
             if let second = state.secondary, !state.expanded {
-                DuoBubble(item: second, geometry: g)
+                DuoBubble(item: second, geometry: g, outline: outline)
                     .offset(x: g.bubbleGap + g.bubble, y: g.bubbleInset)
                     .transition(.scale(scale: 0.4, anchor: .leading).combined(with: .opacity))
             }
@@ -150,10 +162,51 @@ struct IslandBody: View {
     }
 }
 
+/// General › Outline, stroked just inside the island's own animated shape so it follows
+/// every spring: Colored takes the activity's accent, Compact is a hairline that leaves while
+/// expanded, Contrast is a brighter edge that lifts the black island off dark wallpapers.
+struct IslandOutline<S: InsettableShape>: View {
+    let style: OutlineStyle
+    let item: IslandItem?
+    let shape: S
+    var compact = true
+
+    var body: some View {
+        switch style {
+        case .none:
+            EmptyView()
+        case .colored:
+            shape.strokeBorder(LinearGradient(colors: accent, startPoint: .top, endPoint: .bottom), lineWidth: 1.25)
+        case .compact:
+            shape.strokeBorder(Color.white.opacity(0.32), lineWidth: 0.5).opacity(compact ? 1 : 0)
+        case .contrast:
+            shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.6), .white.opacity(0.38)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+        }
+    }
+
+    /// The media activity tints with its artwork colours; everything else gets a neutral grey.
+    private var accent: [Color] {
+        guard item?.id == "media" else { return [Palette.ink.opacity(0.42)] }
+        return NowPlayingState.shared.colors.map { Color(nsColor: $0).opacity(0.95) }
+    }
+}
+
+/// Mask that is clear at the top and opaque below `length` points (all opaque at 0).
+private struct TopFade: View {
+    var length: CGFloat
+    var body: some View {
+        VStack(spacing: 0) {
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: length)
+            Color.black
+        }
+    }
+}
+
 /// Duo mode: the other live activity's leading glyph in a small black circle.
 struct DuoBubble: View {
     let item: IslandItem
     let geometry: NotchGeometry
+    var outline: OutlineStyle = .none
 
     var body: some View {
         let d = geometry.bubble
@@ -164,6 +217,7 @@ struct DuoBubble: View {
                 .offset(x: -5)
                 .id("bubble-\(item.id)")
                 .transition(.islandWing)
+            IslandOutline(style: outline, item: item, shape: Circle())
         }
         .frame(width: d, height: d)
         .clipShape(Circle())
@@ -179,7 +233,7 @@ struct IslandView: View {
         let g = geometry
         let visible = island.visible(in: g)
         let lift = island.hovering && !island.peeking && !island.expanded
-        IslandBody(state: island.state, size: island.size(in: g), radii: island.radii(in: g), geometry: g)
+        IslandBody(state: island.state, size: island.size(in: g), radii: island.radii(in: g), geometry: g, outline: Preferences.shared.outline)
             .scaleEffect(island.pressed ? 0.94 : lift ? 1.075 : 1, anchor: .top)
             .shadow(color: .black.opacity(lift ? 0.25 : 0), radius: 8, y: 2)
             .opacity(visible ? 1 : 0)
