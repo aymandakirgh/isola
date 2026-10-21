@@ -77,6 +77,9 @@ struct SpotifyPlayback: Equatable {
 final class SpotifyWeb {
     static let shared = SpotifyWeb()
     nonisolated static let bundleID = "com.spotify.client"
+    /// ponytail: a fixed port, so the redirect URI to register is exact. If it is ever taken, Spotify also accepts
+    /// a portless http://127.0.0.1/callback registration with any port at sign-in (the redirect_uri page above).
+    /// A loopback listener needs no Local Network access (TN3179: accepting incoming TCP, loopback isn't broadcast-capable).
     nonisolated static let port: UInt16 = 47613
     nonisolated static let redirectURI = "http://127.0.0.1:\(port)/callback"
     nonisolated static let scopes = "user-read-playback-state user-modify-playback-state user-library-read user-library-modify"
