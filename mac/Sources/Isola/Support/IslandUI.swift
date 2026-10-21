@@ -51,9 +51,14 @@ struct LevelBar: View {
     }
 }
 
-/// Endless marquee (two copies leap-frogging) with soft edge fades, 30 pt/s like the web demo.
+/// iOS-style marquee, 30 pt/s like the web demo: text that doesn't fit rests left-aligned for
+/// `pause` seconds, scrolls until the next copy takes its place, and repeats. Near the edges it
+/// blurs and fades progressively (the leading edge only while moving). Text that fits sits centred, untouched.
 struct Marquee<Content: View>: View {
     var speed: CGFloat = 30
+    var pause: TimeInterval = 1.5
+    /// Pins the loop clock (gallery snapshots).
+    var clock: TimeInterval?
     @ViewBuilder var content: Content
     @StateObject private var model = MarqueeModel()
 
@@ -61,29 +66,79 @@ struct Marquee<Content: View>: View {
         GeometryReader { geo in
             let w = model.width
             let scrolls = w > geo.size.width
-            TimelineView(.animation(paused: !scrolls)) { timeline in
-                let t = timeline.date.timeIntervalSince(model.start)
-                let offset = scrolls ? -CGFloat(t * speed).truncatingRemainder(dividingBy: w) : 0
+            TimelineView(.animation(paused: !scrolls || clock != nil)) { timeline in
+                let t = clock ?? timeline.date.timeIntervalSince(model.start)
+                let x = scrolls ? MarqueeModel.offset(at: t, width: w, speed: speed, pause: pause) : 0
+                // The leading edge eases in over the first 12 pt of travel and out over the last 12.
+                let lead = scrolls ? min(1, -x / 12, (w + x) / 12) : 0, trail: CGFloat = scrolls ? 1 : 0
                 HStack(spacing: 0) {
-                    content.fixedSize().background(GeometryReader { g in Color.clear.onAppear { model.width = g.size.width } })
+                    content.fixedSize().background(GeometryReader { g in
+                        // Re-measured when the text changes (a new track), which restarts the loop.
+                        Color.clear
+                            .onAppear { model.width = g.size.width }
+                            .onChange(of: g.size.width) { _, width in
+                                model.width = width
+                                model.start = Date()
+                            }
+                    })
                     if scrolls { content.fixedSize() }
                 }
-                .offset(x: offset)
+                .offset(x: x)
                 .frame(width: geo.size.width, alignment: scrolls ? .leading : .center)
+                .progressiveBlur(radius: 2.5, sharp: MarqueeMask.sharp(lead, trail), blurred: MarqueeMask.blurred(lead, trail))
+                .mask(MarqueeMask.fade(lead, trail))
             }
-            .mask(
-                LinearGradient(
-                    stops: [.init(color: .clear, location: 0.07), .init(color: .black, location: 0.11), .init(color: .black, location: 0.89), .init(color: .clear, location: 0.93)],
-                    startPoint: .leading, endPoint: .trailing
-                )
-            )
         }
+    }
+}
+
+/// Edge masks along a marquee: sharp text hands over to a blurred copy near each edge, which
+/// then fades out. `lead` and `trail` scale each side (0: no edge effect).
+private enum MarqueeMask {
+    static func sharp(_ lead: CGFloat, _ trail: CGFloat) -> LinearGradient {
+        ramp([(0, 1 - lead), (0.04, 1 - lead), (0.16, 1), (0.84, 1), (0.96, 1 - trail), (1, 1 - trail)])
+    }
+
+    static func blurred(_ lead: CGFloat, _ trail: CGFloat) -> LinearGradient {
+        ramp([(0, lead), (0.04, lead), (0.16, 0), (0.84, 0), (0.96, trail), (1, trail)])
+    }
+
+    static func fade(_ lead: CGFloat, _ trail: CGFloat) -> LinearGradient {
+        ramp([(0, 1 - lead), (0.07, 1 - lead), (0.11, 1), (0.89, 1), (0.93, 1 - trail), (1, 1 - trail)])
+    }
+
+    private static func ramp(_ stops: [(location: CGFloat, opacity: CGFloat)]) -> LinearGradient {
+        LinearGradient(stops: stops.map { .init(color: .black.opacity($0.opacity), location: $0.location) }, startPoint: .leading, endPoint: .trailing)
     }
 }
 
 final class MarqueeModel: ObservableObject {
     @Published var width: CGFloat = 0
-    let start = Date()
+    /// When the current loop began.
+    var start = Date()
+
+    /// Scroll offset `t` seconds into the loop: rest at 0 for `pause`, then travel one copy's width.
+    static func offset(at t: TimeInterval, width: CGFloat, speed: CGFloat, pause: TimeInterval) -> CGFloat {
+        guard width > 0, speed > 0 else { return 0 }
+        let p = max(0, t).truncatingRemainder(dividingBy: pause + Double(width / speed))
+        return p < pause ? 0 : -CGFloat(p - pause) * speed
+    }
+
+    static func selfCheck() {
+        precondition(offset(at: 1, width: 300, speed: 30, pause: 1.5) == 0, "marquee rests at the start")
+        precondition(offset(at: 2.5, width: 300, speed: 30, pause: 1.5) == -30, "then scrolls at 30 pt/s")
+        precondition(offset(at: 11.5, width: 300, speed: 30, pause: 1.5) == 0, "one copy later it rests again")
+        precondition(offset(at: 12.5, width: 300, speed: 30, pause: 1.5) == 0, "for the whole pause")
+    }
+}
+
+extension View {
+    /// Progressive blur with public SwiftUI only: the view under one gradient mask and a blurred
+    /// copy under another, so content dissolves into an edge instead of being cut by it. The copy
+    /// takes no clicks and is hidden from VoiceOver.
+    func progressiveBlur<Sharp: View, Blurred: View>(radius: CGFloat, sharp: Sharp, blurred: Blurred) -> some View {
+        mask(sharp).overlay(blur(radius: radius).mask(blurred).allowsHitTesting(false).accessibilityHidden(true))
+    }
 }
 
 extension View {

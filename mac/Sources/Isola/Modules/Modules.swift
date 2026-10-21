@@ -27,8 +27,8 @@ enum Modules {
 /// A sample item exercising the core (wings, peek, expanded) — `isolactl demo`.
 @MainActor
 enum CoreDemo {
-    static func item() -> IslandItem {
-        IslandItem(id: "demo", kind: .liveActivity) {
+    static func item(id: String = "demo") -> IslandItem {
+        IslandItem(id: id, kind: .liveActivity) {
             Image(systemName: "sparkles").font(.system(size: 15, weight: .semibold)).padding(.leading, 12)
         } trailing: {
             Text("Hi").font(.system(size: 13, weight: .semibold)).padding(.trailing, 12)
@@ -38,18 +38,77 @@ enum CoreDemo {
     }
 
     static func start() {
+        // `demo id=other` adds a second activity (duo mode); `key` is the content key a swipe-up
+        // dismissal waits on; `inactive=1` marks it idle like paused media.
         Debug.on("demo") { args in
-            if args["off"] != nil { Island.shared.end("demo") } else { Island.shared.start(item()) }
+            let id = args["id"] ?? "demo"
+            if args["off"] != nil { return Island.shared.end(id) }
+            let inactive = args["inactive"] == "1"
+            Island.shared.start(item(id: id).contentKey(args["key"]).inactive { inactive })
+        }
+        Debug.on("activity.dismiss") { args in
+            if let id = args["id"] ?? Island.shared.currentActivity?.id { Island.shared.dismiss(id) }
+        }
+        Debug.on("duo.swap") { _ in Island.shared.swapDuo() }
+        Debug.on("island.state") { _ in
+            let island = Island.shared
+            Debug.reply(
+                "current=\(island.current?.id ?? "none") secondary=\(island.secondary?.id ?? "none") rotation=\(island.sortedActivities.map(\.id)) "
+                    + "dismissed=\(island.dismissed.keys.sorted()) hiddenOn=\(island.suppressed.sorted()) expanded=\(island.expanded)"
+            )
         }
     }
 
     static func gallery() {
         IslandWindows.selfCheck()
+        Island.selfCheck()
+        Fullscreen.selfCheck()
+        MarqueeModel.selfCheck()
         Gallery.island("core-idle-notch", item: nil, geometry: .notchPreview)
         Gallery.island("core-activity-pill", item: item())
         Gallery.island("core-activity-notch", item: item(), geometry: .notchPreview)
         Gallery.island("core-hover", item: item(), hovering: true)
         Gallery.island("core-peek", item: item(), peeking: true)
         Gallery.island("core-expanded", item: item(), expanded: true)
+
+        let ui = MediaUI()
+        ui.offscreen = true
+        let music = MediaActivity.item(state: SimulatedPlayer.sampleState(index: 0, playing: true), ui: ui)
+        let timer = CalendarItems.timer(snapshot: TimerSnapshot(end: Date().addingTimeInterval(252), duration: 300))
+        for (suffix, g) in [("pill", NotchGeometry.pillPreview), ("notch", NotchGeometry.notchPreview)] {
+            // Outline styles (over a dark wallpaper), and duo mode with the timer in the bubble.
+            Gallery.island("core-outline-colored-\(suffix)", item: music, outline: .colored, geometry: g)
+            Gallery.island("core-outline-compact-\(suffix)", item: item(), outline: .compact, geometry: g)
+            Gallery.island("core-outline-contrast-\(suffix)", item: item(), outline: .contrast, geometry: g)
+            Gallery.island("core-duo-\(suffix)", item: music, secondary: timer, geometry: g)
+        }
+        Gallery.island("core-outline-compact-expanded", item: item(), expanded: true, outline: .compact)
+        Gallery.island("core-outline-contrast-expanded", item: music, expanded: true, outline: .contrast, geometry: .notchPreview)
+        Gallery.island("core-duo-outline", item: music, secondary: timer, outline: .contrast, geometry: .notchPreview)
+        // Mid-spring: the player is still shorter than its content, which blurs into the bottom edge.
+        Gallery.island("core-edge-blur", item: music, expanded: true, size: CGSize(width: 420, height: 134))
+        // Whole General and Island pages (the settings window crops them).
+        Gallery.add("core-general-settings", size: CGSize(width: 520, height: 1010)) {
+            GeneralPage(nav: SettingsNav()).background(Color(nsColor: .windowBackgroundColor))
+        }
+        Gallery.add("core-island-settings", size: CGSize(width: 520, height: 640)) {
+            IslandPage().background(Color(nsColor: .windowBackgroundColor))
+        }
+        // The marquee resting left-aligned, then mid-scroll with both edges soft.
+        for (name, clock) in [("core-marquee-rest", 0.5), ("core-marquee-scrolling", 3.0)] {
+            Gallery.add(name, size: CGSize(width: 300, height: 56), hosted: true) {
+                ZStack {
+                    LinearGradient(colors: [Color(red: 0.25, green: 0.2, blue: 0.62), Color(red: 0.42, green: 0.24, blue: 0.7)], startPoint: .top, endPoint: .bottom)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.black).frame(width: 250, height: 36)
+                    Marquee(clock: clock) {
+                        Text("Isola core demo · a title long enough to scroll")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Palette.muted)
+                            .padding(.horizontal, 6)
+                    }
+                    .frame(width: 230, height: 16)
+                }
+            }
+        }
     }
 }
