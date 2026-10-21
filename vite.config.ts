@@ -3,8 +3,10 @@ import { resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { RELEASES } from "./src/content/releases";
 
 const BRAND = "Isola";
+const SITE = "https://isola-ruby.vercel.app";
 
 // Static copies of index.html with per-route <title>/OG tags, for crawlers and link previews.
 const PAGES = [
@@ -63,6 +65,10 @@ function routeMeta(): Plugin {
           );
         writeFileSync(resolve(dist, `${p.file}.html`), out);
       }
+      // Update feed the Mac app polls once a day.
+      const { version, build, published_at, minimum_system_version } = RELEASES.stable;
+      const feed = { version, build, published_at, minimum_system_version, url: `${SITE}/download` };
+      writeFileSync(resolve(dist, "releases.json"), JSON.stringify(feed, null, 2));
     },
   };
 }

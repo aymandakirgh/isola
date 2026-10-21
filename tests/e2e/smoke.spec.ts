@@ -37,6 +37,9 @@ test("the download is the real DMG the card describes", async ({ page, request }
   const megabytes = Math.floor(Number(dmg.headers()["content-length"]) / 1e6);
   await page.goto("/download");
   await expect(page.getByText(`DMG, ${megabytes}MB`)).toBeVisible();
+  // The Mac app's update feed announces the same version the card offers.
+  const feed = await (await request.get("/releases.json")).json();
+  await expect(page.getByText(`v${feed.version}`)).toBeVisible();
 });
 
 test("unknown paths fall back to home", async ({ page }) => {
