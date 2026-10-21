@@ -422,9 +422,14 @@ struct LockInfoRow: View {
                 item(weather.symbol) {
                     Text(weather.temperature)
                     if options.weatherStyle == .detailed {
-                        Text(weather.condition).opacity(0.8)
-                        if let rain = weather.rain ?? weather.precipitation.map({ "\(Int(($0 * 100).rounded()))%" }) {
+                        // Rain on the way replaces the condition word (the symbol still shows it).
+                        if let rain = weather.rain {
                             Label(rain, systemImage: "drop.fill").labelStyle(.titleAndIcon).opacity(0.8)
+                        } else {
+                            Text(weather.condition).opacity(0.8)
+                            if let p = weather.precipitation {
+                                Label("\(Int((p * 100).rounded()))%", systemImage: "drop.fill").labelStyle(.titleAndIcon).opacity(0.8)
+                            }
                         }
                     }
                 }
@@ -460,7 +465,7 @@ struct LockInfoRow: View {
         }
         .font(.system(size: 16, weight: .semibold))
         .foregroundStyle(LockPalette.purple.opacity(0.9))
-
+        .lineLimit(1)  // a crowded row truncates instead of wrapping
     }
 
     private func item<Content: View>(_ symbol: String, @ViewBuilder _ content: () -> Content) -> some View {
@@ -553,7 +558,7 @@ struct LockScreenComposition<Band: View>: View {
                 VStack(spacing: h * 0.004) {
                     Text(date.formatted(.dateTime.weekday(.wide).day().month(.wide)))
                         .font(.system(size: h * 0.024, weight: .semibold))
-                    Text(date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute()))
+                    Text(date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)))
                         .font(.system(size: h * 0.105, weight: .bold, design: .rounded))
                 }
                 .foregroundStyle(LockPalette.purple.opacity(0.88))
