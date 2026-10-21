@@ -46,12 +46,31 @@ enum Gallery {
     static func render(to dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for entry in entries {
-            let renderer = ImageRenderer(content: entry.view.frame(width: entry.size.width, height: entry.size.height))
-            renderer.scale = 2
-            guard let cg = renderer.cgImage else { continue }
-            let rep = NSBitmapImageRep(cgImage: cg)
-            try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(entry.name).png"))
+            let url = dir.appendingPathComponent("\(entry.name).png")
+            let rep = entry.name.hasSuffix("settings") ? hostedSnapshot(entry) : rendererSnapshot(entry)
+            try? rep?.representation(using: .png, properties: [:])?.write(to: url)
         }
         print("rendered \(entries.count) gallery entries to \(dir.path)")
+    }
+
+    /// 2x snapshot through SwiftUI's offscreen renderer (fine for island content).
+    private static func rendererSnapshot(_ entry: Entry) -> NSBitmapImageRep? {
+        let renderer = ImageRenderer(content: entry.view.frame(width: entry.size.width, height: entry.size.height))
+        renderer.scale = 2
+        return renderer.cgImage.map(NSBitmapImageRep.init(cgImage:))
+    }
+
+    /// AppKit-backed controls (Form, Toggle, Picker, TextField) only draw inside a real
+    /// hosting view, so settings pages go through an offscreen window instead.
+    private static func hostedSnapshot(_ entry: Entry) -> NSBitmapImageRep? {
+        let host = NSHostingView(rootView: entry.view.frame(width: entry.size.width, height: entry.size.height))
+        host.frame = NSRect(origin: .zero, size: entry.size)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        return rep
     }
 }
