@@ -100,6 +100,13 @@ enum CalendarModule {
             let travel = args["travel"].flatMap(Double.init).map { $0 * 60 }  // minutes, as if from Apple Maps
             Island.shared.post(CalendarItems.leave(event, now: Date(), travel: travel), duration: 6)
         }
+        // e.g. isolactl cal.pref colors=0 travelMode=walking leaveBuffer=10
+        Debug.on("cal.pref") { args in
+            let p = CalendarPreferences.shared
+            if let v = args["colors"] { p.calendarColors = v == "1" }
+            if let v = args["travelMode"].flatMap(TravelMode.init(rawValue:)) { p.travelMode = v }
+            if let v = args["leaveBuffer"].flatMap(Int.init) { p.leaveBuffer = v }
+        }
         Debug.on("cal.state") { _ in
             let state = CalendarState.shared
             Debug.reply("authorized=\(state.authorized) today=\(state.today.count) location=\(Weather.shared.locationAuthorized) travel: \(TravelTime.shared.report)")
