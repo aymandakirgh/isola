@@ -84,25 +84,74 @@ struct WingArtwork: View {
     }
 }
 
-/// Four bars painted with the artwork gradient; flat when paused.
+enum SpectrogramStyle: String, CaseIterable, Identifiable {
+    case bars, mirrored, dots, wave
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+}
+
+/// Spectrogram geometry for four band levels (bass → treble, 0...1); all zero is the paused look.
+struct SpectrogramShape: Shape {
+    var style: SpectrogramStyle
+    var levels: [Double]
+
+    var animatableData: AnimatablePair<AnimatablePair<Double, Double>, AnimatablePair<Double, Double>> {
+        get { AnimatablePair(AnimatablePair(levels[0], levels[1]), AnimatablePair(levels[2], levels[3])) }
+        set { levels = [newValue.first.first, newValue.first.second, newValue.second.first, newValue.second.second] }
+    }
+
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        switch style {
+        case .bars, .mirrored:
+            // Mirrored: seven thinner bars, bass in the middle.
+            let bands = style == .bars ? [0, 1, 2, 3] : [3, 2, 1, 0, 1, 2, 3]
+            let (w, gap, tallest): (CGFloat, CGFloat, CGFloat) = style == .bars ? (2, 1.5, 12) : (1.5, 1.25, 14)
+            let x0 = r.midX - (CGFloat(bands.count) * (w + gap) - gap) / 2
+            for (i, band) in bands.enumerated() {
+                let h = 2 + (tallest - 2) * levels[band]
+                p.addRoundedRect(in: CGRect(x: x0 + CGFloat(i) * (w + gap), y: r.midY - h / 2, width: w, height: h), cornerSize: CGSize(width: w / 2, height: w / 2))
+            }
+        case .dots:
+            // A tiny LED meter: one to four dots per band, lit from the bottom.
+            let d: CGFloat = 2.5, step: CGFloat = 4, side = 4 * step - (step - d)
+            for (i, level) in levels.enumerated() {
+                for row in 0...Int((level * 3).rounded()) {
+                    p.addEllipse(in: CGRect(x: r.midX - side / 2 + CGFloat(i) * step, y: r.midY + side / 2 - d - CGFloat(row) * step, width: d, height: d))
+                }
+            }
+        case .wave:
+            // A smooth line swinging up and down through the bands.
+            let points = [CGPoint(x: r.minX + 1, y: r.midY)]
+                + levels.enumerated().map { i, level in CGPoint(x: r.minX + 1 + CGFloat(i + 1) * 3.6, y: r.midY + (i.isMultiple(of: 2) ? -11 : 11) * level) }
+                + [CGPoint(x: r.maxX - 1, y: r.midY)]
+            p.move(to: points[0])
+            for i in 1..<points.count - 1 {
+                let next = points[i + 1]
+                p.addQuadCurve(to: CGPoint(x: (points[i].x + next.x) / 2, y: (points[i].y + next.y) / 2), control: points[i])
+            }
+            p.addLine(to: points[points.count - 1])
+            return p.strokedPath(StrokeStyle(lineWidth: 1.8, lineCap: .round))
+        }
+        return p
+    }
+}
+
+/// Band levels in the chosen style, painted with the artwork gradient; flat when paused.
+/// `bands` are live levels from the audio tap; nil animates canned ones.
 struct Spectrogram: View {
     let state: NowPlayingState
+    var style = SpectrogramStyle.bars
+    var bands: [Float]?
     private static let periods: [Double] = [0.95, 1.46, 0.82, 1.24]
 
     var body: some View {
         let gradient = LinearGradient(colors: state.colors.map { Color(nsColor: $0) }, startPoint: .top, endPoint: .bottom)
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: !state.isPlaying)) { context in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: !state.isPlaying || bands != nil)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            let levels = AudioLevels.shared
-            let live = MediaPreferences.shared.liveWaveform && levels.live
-            HStack(spacing: 1.5) {
-                ForEach(0..<4, id: \.self) { i in
-                    let phase = (t / Self.periods[i]).truncatingRemainder(dividingBy: 1)
-                    let level = live ? Double(levels.bands[i]) : (1 - cos(phase * 2 * .pi)) / 2
-                    let height = state.isPlaying ? 3 + 9 * level : 2
-                    RoundedRectangle(cornerRadius: 1).fill(gradient).frame(width: 2, height: height)
-                }
-            }
+            let canned = Self.periods.map { (1 - cos((t / $0).truncatingRemainder(dividingBy: 1) * 2 * .pi)) / 2 }
+            SpectrogramShape(style: style, levels: !state.isPlaying ? [0, 0, 0, 0] : bands.map { $0.map(Double.init) } ?? canned)
+                .fill(gradient)
         }
         .frame(width: 20, height: 20)
         .brightness(0.06)
@@ -114,8 +163,10 @@ struct MediaTrailing: View {
     let state: NowPlayingState
 
     var body: some View {
-        if MediaPreferences.shared.spectrogram {
-            Spectrogram(state: state)
+        let prefs = MediaPreferences.shared
+        if prefs.spectrogram {
+            let levels = AudioLevels.shared
+            Spectrogram(state: state, style: prefs.spectrogramStyle, bands: prefs.liveWaveform && levels.live ? levels.bands : nil)
         } else {
             Image(systemName: state.isPlaying ? "pause.fill" : "play.fill")
                 .font(.system(size: 12, weight: .bold))
@@ -428,6 +479,10 @@ struct MediaSettingsView: View {
         Form {
             Section("Island") {
                 Toggle("Spectrogram", isOn: $prefs.spectrogram)
+                Picker("Style", selection: $prefs.spectrogramStyle) {
+                    ForEach(SpectrogramStyle.allCases) { Text($0.title).tag($0) }
+                }
+                .disabled(!prefs.spectrogram)
                 Toggle(isOn: $prefs.liveWaveform) {
                     Text("Live waveform")
                     Text("Bars follow the audio that's playing, at about 1% CPU. macOS asks for System Audio Recording access the first time.")

@@ -11,6 +11,9 @@ final class MediaPreferences {
     static let shared = MediaPreferences()
 
     var spectrogram: Bool = load("media.spectrogram", true) { didSet { store.set(spectrogram, forKey: "media.spectrogram"); MediaController.shared.syncLevels() } }
+    var spectrogramStyle: SpectrogramStyle = SpectrogramStyle(rawValue: store.string(forKey: "media.spectrogramStyle") ?? "") ?? .bars {
+        didSet { store.set(spectrogramStyle.rawValue, forKey: "media.spectrogramStyle") }
+    }
     /// Bars follow the real audio (system audio tap) instead of a canned animation.
     var liveWaveform: Bool = load("media.liveWaveform", false) { didSet { store.set(liveWaveform, forKey: "media.liveWaveform"); MediaController.shared.syncLevels() } }
     var grayscaleArtwork: Bool = load("media.grayscaleArtwork", false) { didSet { store.set(grayscaleArtwork, forKey: "media.grayscaleArtwork") } }
@@ -31,6 +34,7 @@ final class MediaPreferences {
         let on = value == "1" || value == "true"
         switch key {
         case "spectrogram": spectrogram = on
+        case "spectrogramStyle": spectrogramStyle = SpectrogramStyle(rawValue: value) ?? .bars
         case "liveWaveform": liveWaveform = on
         case "grayscaleArtwork": grayscaleArtwork = on
         case "dimOnPause": dimOnPause = on
@@ -258,6 +262,16 @@ enum MediaModule {
         precondition(MediaController.names(title: "Song", artist: "", app: "Safari") == ("Song", "Safari"), "app under an artist-less title")
         precondition(MediaController.names(title: "", artist: "", app: nil) == ("Now Playing", ""), "no app either")
         precondition(MediaController.names(title: "Song", artist: "Band", app: nil) == ("Song", "Band"), "tagged track untouched")
+
+        // Every spectrogram style stays inside the 20 pt wing and visibly follows the levels.
+        let wing = CGRect(x: 0, y: 0, width: 20, height: 20)
+        for style in SpectrogramStyle.allCases {
+            func box(_ levels: [Double]) -> CGRect { SpectrogramShape(style: style, levels: levels).path(in: wing).cgPath.boundingBoxOfPath }
+            for levels in [[0.0, 0, 0, 0], [1, 1, 1, 1], [1, 0, 1, 0], [0, 1, 0, 1]] {
+                precondition(wing.contains(box(levels)), "\(style) \(levels) leaves the wing: \(box(levels))")
+            }
+            precondition(box([1, 1, 1, 1]).height > box([0, 0, 0, 0]).height + 6, "\(style) barely moves")
+        }
     }
 
     static func gallery() {
@@ -277,6 +291,18 @@ enum MediaModule {
         Gallery.island("media-compact-playing", item: MediaActivity.item(state: playing, ui: ui))
         Gallery.island("media-compact-paused", item: MediaActivity.item(state: paused, ui: ui))
         Gallery.island("media-compact-playing-notch", item: MediaActivity.item(state: playing, ui: ui), geometry: .notchPreview)
+        // Each spectrogram style, animated and with fixed bass-heavy "live" bands.
+        let variants: [(String, [Float]?)] = [("", nil), ("-live", [0.95, 0.6, 0.35, 0.15])]
+        for style in SpectrogramStyle.allCases {
+            for (suffix, bands) in variants {
+                let item = IslandItem(id: "media", kind: .liveActivity) {
+                    WingArtwork(state: playing, ui: ui).padding(.leading, 9)
+                } trailing: {
+                    Spectrogram(state: playing, style: style, bands: bands).padding(.trailing, 9)
+                }
+                Gallery.island("media-style-\(style.rawValue)\(suffix)", item: item)
+            }
+        }
         Gallery.island("media-peek", item: MediaActivity.item(state: other, ui: ui), peeking: true)
         Gallery.island("media-peek-notch", item: MediaActivity.item(state: playing, ui: ui), peeking: true, geometry: .notchPreview)
         let untitled = SimulatedPlayer.sampleState(index: 2, playing: true)
