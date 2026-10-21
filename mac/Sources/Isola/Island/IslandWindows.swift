@@ -57,6 +57,16 @@ final class IslandPanel: NSPanel {
             width: size.width + slop * 2, height: size.height + geometry.topMargin + slop * 2
         )
     }
+
+    /// Duo mode's bubble beside the island, in screen coordinates (zero when there is none).
+    @MainActor func bubbleRect() -> NSRect {
+        let island = Island.shared, g = geometry
+        guard island.visible(in: g), island.secondary != nil else { return .zero }
+        return NSRect(
+            x: frame.midX + island.size(in: g).width / 2 + g.bubbleGap, y: frame.maxY - g.topMargin - g.bubbleInset - g.bubble,
+            width: g.bubble, height: g.bubble
+        )
+    }
 }
 
 extension NSScreen {
@@ -114,14 +124,16 @@ final class IslandWindows {
         }
     }
 
+    /// The panel whose island (or duo bubble) is under the pointer.
     private func panel(at point: NSPoint) -> IslandPanel? {
-        panels.first { $0.islandRect().contains(point) }
+        panels.first { $0.islandRect().contains(point) || $0.bubbleRect().contains(point) }
     }
 
     func updatePointer(_ location: NSPoint = NSEvent.mouseLocation) {
         let over = panel(at: location)
         for p in panels { p.ignoresMouseEvents = p !== over }
-        Island.shared.setHovering(over != nil)
+        // The bubble takes clicks but doesn't lift or peek the island.
+        Island.shared.setHovering(over?.islandRect().contains(location) == true)
     }
 
     private func installMonitors() {
@@ -147,8 +159,13 @@ final class IslandWindows {
     }
 
     private func handle(_ e: NSEvent) -> NSEvent? {
-        guard panel(at: NSEvent.mouseLocation) != nil else { return e }
+        let location = NSEvent.mouseLocation
+        guard let panel = panel(at: location) else { return e }
         let island = Island.shared
+        if panel.bubbleRect().contains(location) {
+            if e.type == .leftMouseUp { island.swapDuo() }
+            return e
+        }
         switch e.type {
         case .leftMouseDown:
             island.setPressed(true)

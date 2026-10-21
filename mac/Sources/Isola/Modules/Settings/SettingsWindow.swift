@@ -242,6 +242,12 @@ struct IslandPage: View {
                 }
                 Toggle("Natural swipe direction", isOn: $prefs.naturalSwipe)
             }
+            Section("Activities") {
+                Toggle(isOn: $prefs.duo) {
+                    Text("Duo mode")
+                    Text("With two live activities running, the next one waits in a bubble beside the island. Click the bubble to swap them.")
+                }
+            }
             Section {
                 Picker("Speed", selection: $prefs.speed) {
                     ForEach(AnimationSpeed.allCases) { Text($0.rawValue.capitalized).tag($0) }

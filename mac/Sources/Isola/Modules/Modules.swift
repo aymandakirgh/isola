@@ -49,10 +49,11 @@ enum CoreDemo {
         Debug.on("activity.dismiss") { args in
             if let id = args["id"] ?? Island.shared.currentActivity?.id { Island.shared.dismiss(id) }
         }
+        Debug.on("duo.swap") { _ in Island.shared.swapDuo() }
         Debug.on("island.state") { _ in
             let island = Island.shared
             Debug.reply(
-                "current=\(island.current?.id ?? "none") rotation=\(island.sortedActivities.map(\.id)) "
+                "current=\(island.current?.id ?? "none") secondary=\(island.secondary?.id ?? "none") rotation=\(island.sortedActivities.map(\.id)) "
                     + "dismissed=\(island.dismissed.keys.sorted()) hiddenOn=\(island.suppressed.sorted()) expanded=\(island.expanded)"
             )
         }
@@ -69,6 +70,14 @@ enum CoreDemo {
         Gallery.island("core-peek", item: item(), peeking: true)
         Gallery.island("core-expanded", item: item(), expanded: true)
 
+        let ui = MediaUI()
+        ui.offscreen = true
+        let music = MediaActivity.item(state: SimulatedPlayer.sampleState(index: 0, playing: true), ui: ui)
+        let timer = CalendarItems.timer(snapshot: TimerSnapshot(end: Date().addingTimeInterval(252), duration: 300))
+        for (suffix, g) in [("pill", NotchGeometry.pillPreview), ("notch", NotchGeometry.notchPreview)] {
+            // Duo mode, with the timer in the bubble.
+            Gallery.island("core-duo-\(suffix)", item: music, secondary: timer, geometry: g)
+        }
         // Whole General and Island pages (the settings window crops them).
         Gallery.add("core-general-settings", size: CGSize(width: 520, height: 1010)) {
             GeneralPage(nav: SettingsNav()).background(Color(nsColor: .windowBackgroundColor))

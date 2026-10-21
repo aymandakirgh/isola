@@ -40,6 +40,15 @@ final class Island {
     /// What the island shows right now: a transient beats the live activity.
     var current: IslandItem? { transient ?? currentActivity }
 
+    /// Duo mode: the other live activity, shown in a bubble beside the island.
+    var secondary: IslandItem? { Preferences.shared.duo ? partner : nil }
+
+    /// The most important other activity; none while expanded or while a transient shows.
+    var partner: IslandItem? {
+        guard transient == nil, !expanded, let shown = currentActivity else { return nil }
+        return sortedActivities.first { $0.id != shown.id }
+    }
+
     var isIdle: Bool { current == nil && !expanded }
 
     // MARK: - Live activities
@@ -119,6 +128,12 @@ final class Island {
         if expanded { cycledWhileExpanded = true }
         let next = list[(activityIndex + 1) % list.count].id
         withAnimation(Springs.expand) { show(next) }
+    }
+
+    /// Duo mode: clicking the bubble swaps the two activities.
+    func swapDuo() {
+        guard let other = secondary else { return }
+        withAnimation(Springs.expand) { show(other.id) }
     }
 
     // MARK: - Transients (notifications and HUDs)
@@ -238,7 +253,7 @@ final class Island {
     // MARK: - Geometry
 
     var state: IslandState {
-        IslandState(item: current, expanded: expanded, peeking: peeking, hovering: hovering, pressed: pressed)
+        IslandState(item: current, secondary: secondary, expanded: expanded, peeking: peeking, hovering: hovering, pressed: pressed)
     }
 
     /// Island size on a given screen for the current state.
@@ -272,7 +287,7 @@ final class Island {
 
     // MARK: - Self-check (`Isola --gallery`)
 
-    /// Swipe-up dismissal and the restore after cycling, on a private instance.
+    /// Swipe-up dismissal, duo pairing and the restore after cycling, on a private instance.
     static func selfCheck() {
         let island = Island()
         func item(_ id: String, _ priority: Int, key: String? = nil) -> IslandItem {
@@ -282,9 +297,9 @@ final class Island {
         }
         island.start(item("music", 10, key: "song 1"))
         island.start(item("timer", 5))
-        precondition(island.current?.id == "music", "the most important activity shows")
+        precondition(island.current?.id == "music" && island.partner?.id == "timer", "most important shows, the other pairs")
         island.swipe(.up)
-        precondition(island.current?.id == "timer", "swipe up dismisses the compact activity")
+        precondition(island.current?.id == "timer" && island.partner == nil, "swipe up dismisses the compact activity")
         island.update(item("music", 10, key: "song 1"))
         precondition(island.current?.id == "timer", "same content: still dismissed")
         island.update(item("music", 10, key: "song 2"))

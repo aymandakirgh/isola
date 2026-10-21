@@ -30,4 +30,8 @@ struct NotchGeometry: Equatable {
     var radius: CGFloat { height * 0.3 }
     /// Gap above a floating pill.
     var topMargin: CGFloat { attached ? 0 : 6 }
+    /// Duo mode's bubble: a circle beside the island, kept off the top edge when the island is flush with it.
+    var bubble: CGFloat { attached ? height - 4 : height }
+    var bubbleInset: CGFloat { attached ? 2 : 0 }
+    var bubbleGap: CGFloat { (height * 0.18).rounded() }
 }

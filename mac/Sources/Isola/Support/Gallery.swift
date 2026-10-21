@@ -26,10 +26,10 @@ enum Gallery {
 
     /// The island in a given state over a wallpaper-like strip, as it sits under the menu bar.
     static func island(
-        _ name: String, item: IslandItem?, expanded: Bool = false, peeking: Bool = false,
+        _ name: String, item: IslandItem?, secondary: IslandItem? = nil, expanded: Bool = false, peeking: Bool = false,
         hovering: Bool = false, geometry g: NotchGeometry = .pillPreview
     ) {
-        let state = IslandState(item: item, expanded: expanded, peeking: peeking, hovering: hovering)
+        let state = IslandState(item: item, secondary: secondary, expanded: expanded, peeking: peeking, hovering: hovering)
         let size = Island.size(for: state, in: g)
         let radii = Island.radii(for: state, in: g)
         let canvas = CGSize(width: max(size.width + 120, 420), height: size.height + g.topMargin + 40)

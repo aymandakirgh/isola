@@ -79,6 +79,8 @@ extension AnyTransition {
 /// Snapshot of what to draw; shared by the live window and the offscreen gallery.
 struct IslandState {
     var item: IslandItem?
+    /// Duo mode's second activity, drawn in a bubble beside the island.
+    var secondary: IslandItem?
     var expanded = false
     var peeking = false
     var hovering = false
@@ -102,6 +104,13 @@ struct IslandBody: View {
                 .clipShape(IslandShape(top: radii.top, bottom: radii.bottom))
         }
         .frame(width: size.width, height: size.height)
+        .overlay(alignment: .topTrailing) {
+            if let second = state.secondary, !state.expanded {
+                DuoBubble(item: second, geometry: g)
+                    .offset(x: g.bubbleGap + g.bubble, y: g.bubbleInset)
+                    .transition(.scale(scale: 0.4, anchor: .leading).combined(with: .opacity))
+            }
+        }
         .environment(\.colorScheme, .dark)
         .foregroundStyle(Color(red: 1, green: 0.98, blue: 0.957))
     }
@@ -141,6 +150,26 @@ struct IslandBody: View {
     }
 }
 
+/// Duo mode: the other live activity's leading glyph in a small black circle.
+struct DuoBubble: View {
+    let item: IslandItem
+    let geometry: NotchGeometry
+
+    var body: some View {
+        let d = geometry.bubble
+        ZStack {
+            Circle().fill(Color.black)
+            // Wings carry about 10 pt of leading padding: pull the glyph back to the centre.
+            item.leading
+                .offset(x: -5)
+                .id("bubble-\(item.id)")
+                .transition(.islandWing)
+        }
+        .frame(width: d, height: d)
+        .clipShape(Circle())
+    }
+}
+
 /// Live island for one screen, driven by `Island.shared`.
 struct IslandView: View {
     let geometry: NotchGeometry
@@ -148,13 +177,9 @@ struct IslandView: View {
 
     var body: some View {
         let g = geometry
-        let state = IslandState(
-            item: island.current, expanded: island.expanded, peeking: island.peeking,
-            hovering: island.hovering, pressed: island.pressed
-        )
         let visible = island.visible(in: g)
         let lift = island.hovering && !island.peeking && !island.expanded
-        IslandBody(state: state, size: island.size(in: g), radii: island.radii(in: g), geometry: g)
+        IslandBody(state: island.state, size: island.size(in: g), radii: island.radii(in: g), geometry: g)
             .scaleEffect(island.pressed ? 0.94 : lift ? 1.075 : 1, anchor: .top)
             .shadow(color: .black.opacity(lift ? 0.25 : 0), radius: 8, y: 2)
             .opacity(visible ? 1 : 0)
