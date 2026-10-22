@@ -17,9 +17,10 @@ final class Island {
         let p = Preferences.shared
         return Gestures(toggle: p.swipeToToggle, skip: p.swipeToSkip, dismiss: p.swipeToDismiss, cycle: p.swipeToCycle)
     }
-    /// Island › Idle Activity: what opens with nothing running, and whether it also stays in the
-    /// compact island (`forced`). Nil for none; `Modules` wires it to the media and calendar views.
-    @ObservationIgnored var idle: @MainActor () -> (item: IslandItem, forced: Bool)? = { nil }
+    /// Island › Idle Activity: the item that opens with nothing running (nil for none), and whether
+    /// it also stays in the compact island. `Modules` wires them to the media and calendar views.
+    @ObservationIgnored var idleItem: @MainActor () -> IslandItem? = { nil }
+    @ObservationIgnored var idleKept: @MainActor () -> Bool = { false }
 
     private(set) var activities: [IslandItem] = []
     private(set) var transient: IslandItem?
@@ -55,11 +56,10 @@ final class Island {
     }
 
     /// What the island shows right now: a transient beats the live activity. With nothing
-    /// running, the Idle Activity shows while it's open, and all the time when forced.
+    /// running, the Idle Activity shows while it's open, and all the time when kept.
     var current: IslandItem? {
         if let item = transient ?? currentActivity { return item }
-        guard let idle = idle(), expanded || idle.forced else { return nil }
-        return idle.item
+        return expanded || idleKept() ? idleItem() : nil
     }
 
     /// Duo mode: the other live activity, shown in a bubble beside the island.
@@ -225,7 +225,7 @@ final class Island {
     /// Only items with a panel expand (with nothing running, the Idle Activity's); with "Expand
     /// while inactive" off, idle ones (paused media) stay compact.
     private var canExpand: Bool {
-        guard let item = current ?? idle()?.item, item.expanded != nil else { return false }
+        guard let item = current ?? idleItem(), item.expanded != nil else { return false }
         return Preferences.shared.expandWhileInactive || item.inactive?() != true
     }
 
@@ -398,11 +398,12 @@ final class Island {
         island.swipe(.right)
         precondition(skips == 1, "on, they do")
 
-        // Island › Idle Activity: with nothing running a tap or swipe down opens it; forced, it also stays compact.
+        // Island › Idle Activity: with nothing running a tap or swipe down opens it; kept, it also stays compact.
         let quiet = Island()
         quiet.gestures = { Gestures() }
-        var forced = false
-        quiet.idle = { (item("idle.calendar", 0), forced) }
+        var kept = false
+        quiet.idleItem = { item("idle.calendar", 0) }
+        quiet.idleKept = { kept }
         precondition(quiet.isIdle && quiet.current == nil, "nothing running: idle")
         quiet.tap()
         precondition(quiet.expanded && quiet.current?.id == "idle.calendar", "a tap opens the idle panel")
@@ -411,8 +412,8 @@ final class Island {
         quiet.swipe(.down)
         precondition(quiet.expanded && quiet.current?.id == "idle.calendar", "swipe down opens it too")
         quiet.setExpanded(false)
-        forced = true
-        precondition(quiet.current?.id == "idle.calendar" && !quiet.isIdle, "forced: it stays in the compact island")
+        kept = true
+        precondition(quiet.current?.id == "idle.calendar" && !quiet.isIdle, "kept: it stays in the compact island")
         quiet.start(item("music", 10))
         precondition(quiet.current?.id == "music", "a live activity takes over")
         quiet.end("music")

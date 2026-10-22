@@ -26,7 +26,8 @@ enum Modules {
 }
 
 /// Island › Idle Activity: the panel a click, hover-expand or swipe down opens with nothing
-/// running, built from the media and calendar views. Forced, its wings stay in the compact island.
+/// running, built from the media and calendar views. With "Keep it in the island" on, its wings
+/// also show in the compact island.
 @MainActor
 enum IdleActivities {
     /// The player beside the calendar, under a band that keeps a hardware notch clear of both.
@@ -34,7 +35,8 @@ enum IdleActivities {
     private static let playerSize = CGSize(width: 420, height: 162)
 
     static func start() {
-        Island.shared.idle = { item(Preferences.shared.idleActivity, lastEnded: Island.shared.lastEnded).map { ($0, Preferences.shared.forceIdleActivity) } }
+        Island.shared.idleItem = { item(Preferences.shared.idleActivity, lastEnded: Island.shared.lastEnded) }
+        Island.shared.idleKept = { Preferences.shared.forceIdleActivity }
         // Calendar's "Show the date when nothing else is running" became Idle Activity › Calendar, kept in the island.
         let calendar = CalendarPreferences.shared
         if calendar.idleActivity {
