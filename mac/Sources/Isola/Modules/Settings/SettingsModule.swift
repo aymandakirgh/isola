@@ -334,7 +334,6 @@ enum SettingsGallery {
 
     static func snapshot<V: View>(_ name: String, size: CGSize, @ViewBuilder _ view: () -> V) {
         guard let dir = directory else { return }
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let host = NSHostingView(rootView: view().frame(width: size.width, height: size.height).background(Color(nsColor: .windowBackgroundColor)))
         host.frame = CGRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: CGRect(x: -20000, y: -20000, width: size.width, height: size.height), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -365,6 +364,8 @@ enum SettingsGallery {
             return print("gallery: no bitmap for \(name) (\(type(of: view)) \(view.bounds))")
         }
         view.cacheDisplay(in: view.bounds, to: rep)
+        // Window captures can run before Gallery.render makes the folder.
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(name).png"))
     }
 

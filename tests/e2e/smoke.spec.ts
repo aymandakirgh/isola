@@ -135,7 +135,7 @@ test("the privacy policy says what is kept", async ({ page }) => {
   ).toBeVisible();
   await expect(
     page.getByText(
-      /uses it briefly, in memory, to rate-limit requests, and we never store it\./,
+      /keeps it in memory for up to an hour to rate-limit requests, and never stores it\./,
     ),
   ).toBeVisible();
   await expect(page.getByText(/no data|hardware ID/i)).toHaveCount(0);
