@@ -47,6 +47,8 @@ struct LockWeather {
     var rain: String?
     /// The next sunrise or sunset, for the Sunrise & Sunset style.
     var sun: SunEvent?
+    /// The forecast place's, which its times read in.
+    var timeZone = TimeZone.current
 }
 
 struct SunEvent: Equatable {
@@ -88,7 +90,7 @@ struct LockScreenData {
             weather: w.available
                 ? LockWeather(
                     symbol: w.symbol, temperature: w.displayTemperature, condition: w.condition, precipitation: w.precipitationChance,
-                    rain: w.precipitationDetail, sun: .next(sunrises: w.sunrise, sunsets: w.sunset, after: date)
+                    rain: w.precipitationDetail, sun: .next(sunrises: w.sunrise, sunsets: w.sunset, after: date), timeZone: w.timeZone
                 )
                 : nil,
             battery: p.hasBattery ? LockBattery(level: p.level, charging: p.charging, timeToEmpty: p.timeToEmpty) : nil,
@@ -445,7 +447,7 @@ struct LockInfoRow: View {
             }
             if options.showWeather, let weather = data.weather {
                 if options.weatherStyle == .sun, let sun = weather.sun {
-                    item(sun.rise ? "sunrise.fill" : "sunset.fill") { Text(sun.time.formatted(date: .omitted, time: .shortened)) }
+                    item(sun.rise ? "sunrise.fill" : "sunset.fill") { Text(sun.time.formatted(Date.FormatStyle(date: .omitted, time: .shortened, timeZone: weather.timeZone))) }
                 } else {
                     item(weather.symbol) {
                         Text(weather.temperature)

@@ -32,7 +32,7 @@ enum LockScreenModule {
         Debug.on("lock.state") { _ in
             let p = LockScreenPreferences.shared, w = WeatherState.shared
             let sun = SunEvent.next(sunrises: w.sunrise, sunsets: w.sunset, after: Date())
-            let next = sun.map { "\($0.rise ? "sunrise" : "sunset")@\($0.time.formatted(date: .omitted, time: .shortened))" } ?? "none"
+            let next = sun.map { "\($0.rise ? "sunrise" : "sunset")@\($0.time.formatted(Date.FormatStyle(date: .omitted, time: .shortened, timeZone: w.timeZone)))" } ?? "none"
             Debug.reply("nowPlayingStyle=\(p.nowPlayingStyle.rawValue) weatherStyle=\(p.weatherStyle.rawValue) sun=\(next)")
         }
     }

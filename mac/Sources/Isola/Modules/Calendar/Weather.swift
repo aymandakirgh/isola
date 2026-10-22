@@ -74,6 +74,7 @@ final class Weather: NSObject, CLLocationManagerDelegate {
         w.precipitationDetail = Self.rainOutlook(forecast, now: Date())
         w.sunrise = Self.dates(forecast.daily?.sunrise)
         w.sunset = Self.dates(forecast.daily?.sunset)
+        w.timeZone = forecast.zone
         w.place = place
         w.available = true
     }
@@ -93,7 +94,7 @@ final class Weather: NSObject, CLLocationManagerDelegate {
         let run = hours[first...].prefix(while: wet)
         let kind = run.lazy.compactMap { $0.code.flatMap(WeatherCode.precipitation) }.first ?? "Rain"
         let start = hours[first].start
-        let time = start.formatted(Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, timeZone: TimeZone(identifier: f.timezone ?? "") ?? .current))
+        let time = start.formatted(Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, timeZone: f.zone))
         let when = start <= now ? "now" : run.count > 1 ? "from \(time)" : "at \(time)"
         return "\(kind) \(when)" + (run.compactMap(\.chance).max().map { " · \($0)%" } ?? "")
     }
@@ -118,8 +119,11 @@ final class Weather: NSObject, CLLocationManagerDelegate {
         precondition(outlook("[0,10,20,10,0,0,0,0]", "[2,2,3,3,2,2,2,2]") == nil)
         // Sunrise and sunset come as unix times per day; a missing one (polar night) is skipped.
         let daily = #"{"current":{"temperature_2m":4,"weather_code":0,"is_day":0},"daily":{"time":[1792533600,1792620000],"sunrise":[1792561200,null],"sunset":[1792600140,1792686480]}}"#
-        let sun = try! JSONDecoder().decode(Forecast.self, from: Data(daily.utf8)).daily
+        let forecast = try! JSONDecoder().decode(Forecast.self, from: Data(daily.utf8)), sun = forecast.daily
         precondition(dates(sun?.sunrise) == [Date(timeIntervalSince1970: 1_792_561_200)] && dates(sun?.sunset).count == 2, "daily sunrise and sunset")
+        // They read in the place's time zone, like the rain outlook; an answer without one reads in this Mac's.
+        let tokyo = try! JSONDecoder().decode(Forecast.self, from: Data(daily.replacingOccurrences(of: #"{"current""#, with: #"{"timezone":"Asia/Tokyo","current""#).utf8))
+        precondition(tokyo.zone.identifier == "Asia/Tokyo" && forecast.zone == .current, "the forecast place's time zone")
     }
 
     static func applyUnit() {
@@ -190,6 +194,9 @@ private struct Forecast: Decodable {
     let current: Current
     let hourly: Hourly?
     let daily: Daily?
+
+    /// The place's time zone (`timezone=auto`), this Mac's when the answer has none.
+    var zone: TimeZone { timezone.flatMap(TimeZone.init(identifier:)) ?? .current }
 }
 
 /// WMO weather interpretation codes → SF Symbol + short condition.
