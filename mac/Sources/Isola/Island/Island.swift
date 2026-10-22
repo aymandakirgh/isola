@@ -18,9 +18,10 @@ final class Island {
         return Gestures(toggle: p.swipeToToggle, skip: p.swipeToSkip, dismiss: p.swipeToDismiss, cycle: p.swipeToCycle)
     }
     /// Island › Idle Activity: the item that opens with nothing running (nil for none), and whether
-    /// it also stays in the compact island. `Modules` wires them to the media and calendar views.
-    @ObservationIgnored var idleItem: @MainActor () -> IslandItem? = { nil }
-    @ObservationIgnored var idleKept: @MainActor () -> Bool = { false }
+    /// it also stays in the compact island. `Modules` wires them to the media and calendar views after
+    /// the island first draws, so they're observed: wiring them redraws it.
+    var idleItem: @MainActor () -> IslandItem? = { nil }
+    var idleKept: @MainActor () -> Bool = { false }
 
     private(set) var activities: [IslandItem] = []
     private(set) var transient: IslandItem?
@@ -269,13 +270,15 @@ final class Island {
     func swipe(_ direction: SwipeDirection) {
         let g = gestures()
         // A gesture switched off in Island › Gestures reaches neither the activity nor the island:
-        // horizontal swipes are the media skip, swipe up on a compact activity dismisses it.
+        // horizontal swipes are the media skip, swipe up on a compact activity dismisses it. An activity's
+        // own swipe up is a dismissal too (a calendar event's, peeking or not): with that off, swipe up
+        // only closes the panel, a peek or a notification.
         switch direction {
         case .left, .right: guard g.skip else { return }
         case .up where !expanded && !peeking && transient == nil: guard g.dismiss else { return }
         default: break
         }
-        if current?.onSwipe?(direction) == true { return haptic() }
+        if direction != .up || g.dismiss, current?.onSwipe?(direction) == true { return haptic() }
         switch direction {
         case .down:
             if !expanded {
@@ -388,6 +391,15 @@ final class Island {
         island.post(IslandItem(id: "note", kind: .notification) { EmptyView() } trailing: { EmptyView() }, duration: 60)
         island.swipe(.up)
         precondition(island.transient == nil, "…but a notification still closes")
+        var dismissals = 0
+        island.start(item("event", 30).peek { EmptyView() }.onSwipe { direction in
+            if direction == .up { dismissals += 1 }
+            return direction == .up
+        })
+        island.quickPeek(true)
+        island.swipe(.up)
+        precondition(dismissals == 0 && !island.peeking, "…nor does a peeking activity's own swipe up (a calendar event's): only the peek closes")
+        island.end("event")
         var skips = 0
         island.start(item("player", 20).onSwipe { direction in
             guard direction == .left || direction == .right else { return false }
