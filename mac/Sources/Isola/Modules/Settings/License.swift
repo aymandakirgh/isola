@@ -590,9 +590,14 @@ final class License {
 final class Updates {
     static let shared = Updates()
     static let feed = URL(string: "https://isola-ruby.vercel.app/releases.json")!
+    /// Ed25519 public key (base64) of the key that signs release zips (mac/scripts/update_key.swift).
+    nonisolated static let signingKey = "Zuf0t4dE6ZtQNei140hgrqadGenuT4w/hkyKkfZt7rI="
+    /// A zip without that key's signature is never unzipped: the download page opens instead.
+    nonisolated static let unsigned = "The download isn’t signed by Isola, so it wasn’t installed. Get it from the download page instead."
 
     /// A release in releases.json. `url` is its download page; `zip` (Isola.app zipped with
-    /// `ditto -c -k --keepParent`) and its `sha256` let Update Now… install it in place.
+    /// `ditto -c -k --keepParent`), its `sha256` and its Ed25519 `signature` (base64, by the key
+    /// `signingKey` is the public half of) let Update Now… install it in place.
     struct Release: Decodable, Equatable {
         var version: String
         var build: Int?
@@ -600,7 +605,13 @@ final class Updates {
         var notes: String?
         var zip: URL?
         var sha256: String?
+        var signature: String?
         var changes: Changes?
+
+        /// Anything for the update window's panel: notes, or a section with changes in it.
+        var hasNotes: Bool {
+            notes != nil || [changes?.features, changes?.fixes, changes?.important].contains { $0?.isEmpty == false }
+        }
     }
 
     /// What's new, by section of the update window.
@@ -651,7 +662,9 @@ final class Updates {
     var earlyBird = UserDefaults.standard.bool(forKey: "updates.earlyBird") {
         didSet {
             UserDefaults.standard.set(earlyBird, forKey: "updates.earlyBird")
-            if automatic, Self.current != nil { check() }  // what's on offer changes now, not tomorrow
+            // What's on offer changes now, not at the next check: automatic checks or not, a beta
+            // that Check for Updates… found goes when Early bird does.
+            if Self.current != nil { check() }
         }
     }
     /// Remind Me Later: no island prompt until then.
@@ -662,6 +675,8 @@ final class Updates {
     private(set) var lastCheck = UserDefaults.standard.object(forKey: "updates.lastCheck") as? Date
     private(set) var failed = false
     private(set) var phase = Phase.idle
+    /// The release `phase` is about: the update window for another one starts from idle (`phase(of:)`).
+    private(set) var updating: Release?
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var download: NSKeyValueObservation?
 
@@ -673,13 +688,14 @@ final class Updates {
     }
 
     func start() {
-        // The update window for a stand-in release (zip= and sha256= make Update Now… real), and the state.
+        // The update window for a stand-in release (zip=, sha256= and signature= make Update Now… real), and the state.
         Debug.on("update.dialog") { args in
             var release = Self.sample
             release.version = args["version"] ?? release.version
             release.build = args["build"].flatMap(Int.init) ?? release.build
             release.zip = args["zip"].flatMap(URL.init(string:))
             release.sha256 = args["sha256"]
+            release.signature = args["signature"]
             UpdateWindow.show(release)
         }
         Debug.on("update.state") { _ in
@@ -735,29 +751,38 @@ final class Updates {
 
     // MARK: - Update Now… and Restart Isola…
 
+    /// Where Update Now… is for `release`: another release's download, staged app or error isn't its.
+    func phase(of release: Release) -> Phase { release == updating ? phase : .idle }
+
     /// Downloads the zip, checks it and unzips it to a temporary folder, ready for Restart Isola….
-    /// Without a zip, or where Isola can't replace itself (a disk image, a folder it can't write),
-    /// it opens the download page instead and returns false.
+    /// Without a zip and what checks it, or where Isola can't replace itself (a disk image, a folder
+    /// it can't write), it opens the download page instead and returns false. So does a zip that
+    /// turns out not to be signed, once downloaded.
     @discardableResult
     func install(_ release: Release) -> Bool {
-        guard let zip = release.zip, ["https", "file"].contains(zip.scheme), let sha256 = release.sha256, Self.installTarget() != nil else {
+        guard let zip = release.zip, ["https", "file"].contains(zip.scheme), let sha256 = release.sha256, release.signature != nil,
+              Self.installTarget() != nil else {
             NSWorkspace.shared.open(release.url)
             return false
         }
+        updating = release
         phase = .waiting
         let task = URLSession.shared.downloadTask(with: zip) { file, response, _ in
             // The download is deleted when this returns: check and unzip it here, off the main thread.
             let result: Phase
             if let file, (response as? HTTPURLResponse)?.statusCode ?? 200 == 200 {
-                DispatchQueue.main.async { MainActor.assumeIsolated { Updates.shared.phase = .installing } }
+                DispatchQueue.main.async { MainActor.assumeIsolated { if Updates.shared.updating == release { Updates.shared.phase = .installing } } }
                 result = Self.unpack(file, sha256: sha256, release: release)
             } else {
                 result = .failed("Couldn’t download the update. Check your connection and try again.")
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    Updates.shared.download = nil
-                    Updates.shared.phase = result
+                    let u = Updates.shared
+                    guard u.updating == release else { return }  // Update Now… for another release since
+                    u.download = nil
+                    u.phase = result
+                    if result == .failed(Self.unsigned) { NSWorkspace.shared.open(release.url) }
                 }
             }
         }
@@ -766,7 +791,7 @@ final class Updates {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     let u = Updates.shared
-                    switch u.phase {
+                    switch u.phase(of: release) {
                     case .waiting, .downloading: if fraction > 0 { u.phase = .downloading(fraction) }
                     default: break
                     }
@@ -777,12 +802,13 @@ final class Updates {
         return true
     }
 
-    /// The zip, checked against the release's SHA-256 and unzipped into a new temporary folder:
-    /// ready when the Isola.app inside is this release.
-    nonisolated static func unpack(_ zip: URL, sha256: String, release: Release) -> Phase {
+    /// The zip, checked against the release's SHA-256 and signature (`key`'s), then unzipped into a
+    /// new temporary folder: ready when the Isola.app inside is this release.
+    nonisolated static func unpack(_ zip: URL, sha256: String, release: Release, key: String = signingKey) -> Phase {
         guard let data = try? Data(contentsOf: zip), SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == sha256.lowercased() else {
             return .failed("The download doesn’t match this release, so it wasn’t installed.")
         }
+        guard verify(data, signature: release.signature, key: key) else { return .failed(unsigned) }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Isola-update-\(UUID().uuidString)")
         let ditto = Process()
         ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -800,6 +826,13 @@ final class Updates {
         return .ready(app)
     }
 
+    /// `signature` (base64) is the Ed25519 signature of `data` by the key whose public half is `key` (base64).
+    nonisolated static func verify(_ data: Data, signature: String?, key: String = signingKey) -> Bool {
+        guard let signature = signature.flatMap({ Data(base64Encoded: $0) }), let raw = Data(base64Encoded: key),
+              let key = try? Curve25519.Signing.PublicKey(rawRepresentation: raw) else { return false }
+        return key.isValidSignature(signature, for: data)
+    }
+
     /// This Isola.app, if Isola can replace it.
     nonisolated static func installTarget(_ app: URL = Bundle.main.bundleURL) -> URL? {
         let files = FileManager.default
@@ -809,9 +842,9 @@ final class Updates {
         return app
     }
 
-    /// Restart Isola…: the relaunch script takes over, and Isola quits.
-    func restart() {
-        guard case .ready(let app) = phase, let target = Self.installTarget() else { return }
+    /// Restart Isola… with `release` staged: the relaunch script takes over, and Isola quits.
+    func restart(_ release: Release) {
+        guard case .ready(let app) = phase(of: release), let target = Self.installTarget() else { return }
         do {
             _ = try Self.swap(app, into: target, after: ProcessInfo.processInfo.processIdentifier, open: "/usr/bin/open")
             NSApp.terminate(nil)
@@ -897,32 +930,49 @@ final class Updates {
                      "an older beta: the stable release")
         precondition(feed(#"{"version":"1.4.7","url":"https://isola-ruby.vercel.app/download","beta":{"version":"1.5"}}"#).beta == nil,
                      "a beta that doesn't decode is left out")
+        precondition(!feed(today).stable.hasNotes && feed(both).stable.hasNotes && !Release(version: "1.5", url: sample.url, changes: Changes(fixes: [])).hasNotes,
+                     "the update window's panel only with something in it")
         selfCheckInstall()
+
+        // Update Now… belongs to the release it was for: the window for 1.6 starts from idle, not with 1.5's staged app.
+        let staged = FileManager.default.temporaryDirectory.appendingPathComponent("Isola.app")
+        var next = sample
+        next.version = "1.6"
+        shared.updating = sample
+        shared.phase = .ready(staged)
+        precondition(shared.phase(of: sample) == .ready(staged) && shared.phase(of: next) == .idle, "a staged 1.5 isn't 1.6's")
 
         Gallery.island("update-available-pill", item: prompt(sample))
         Gallery.island("update-available-notch", item: prompt(sample), geometry: .notchPreview)
         if let dir = SettingsGallery.directory {
-            let staged = FileManager.default.temporaryDirectory.appendingPathComponent("Isola.app")
+            let mismatch = Phase.failed("The download doesn’t match this release, so it wasn’t installed.")
             let phases: [(String, Phase)] = [
-                ("", .idle), ("-waiting", .waiting), ("-downloading", .downloading(0.42)), ("-ready", .ready(staged)),
-                ("-failed", .failed("The download doesn’t match this release, so it wasn’t installed.")),
+                ("", .idle), ("-waiting", .waiting), ("-downloading", .downloading(0.42)), ("-ready", .ready(staged)), ("-failed", mismatch),
             ]
             for (suffix, phase) in phases {
                 shared.phase = phase
                 SettingsGallery.capture(UpdateWindow.makeWindow(sample), name: "update-window\(suffix)", dir: dir)
             }
-            shared.phase = .idle
             var plain = sample
             plain.changes = nil
             SettingsGallery.capture(UpdateWindow.makeWindow(plain), name: "update-window-notes", dir: dir)
+            // Nothing to list: no empty panel, and a window that fits the rest, growing for an error that comes up later.
+            plain.notes = nil
+            shared.updating = plain
+            shared.phase = .idle
+            SettingsGallery.capture(UpdateWindow.makeWindow(plain), name: "update-window-bare", dir: dir)
+            let bare = UpdateWindow.makeWindow(plain)
+            shared.phase = mismatch
+            SettingsGallery.capture(bare, name: "update-window-bare-failed", dir: dir)
         }
+        shared.phase = .idle
         // SettingsModule's gallery runs this one: the License tab's other windows render here too.
         License.gallery()
     }
 
-    /// Update Now… and Restart Isola… on stand-in apps in a scratch folder: a zip that matches is
-    /// unzipped, one that doesn't (or isn't the release offered) is refused, and the script swaps
-    /// the new app in, or keeps the old one when it can't.
+    /// Update Now… and Restart Isola… on stand-in apps in a scratch folder: a zip that matches and is
+    /// signed is unzipped, one that doesn't (or isn't signed, or isn't the release offered) is refused,
+    /// and the script swaps the new app in, or keeps the old one when it can't.
     private static func selfCheckInstall() {
         let files = FileManager.default
         let dir = files.temporaryDirectory.appendingPathComponent("isola-update-selfcheck-\(UUID().uuidString)")
@@ -948,16 +998,27 @@ final class Updates {
         ditto.arguments = ["-c", "-k", "--keepParent", app("build/Isola.app", version: "1.5").path, zip.path]
         try? ditto.run()
         ditto.waitUntilExit()
-        let sha256 = SHA256.hash(data: (try? Data(contentsOf: zip)) ?? Data()).map { String(format: "%02x", $0) }.joined()
-        let release = Release(version: "1.5", build: 160, url: sample.url)
-        guard case .ready(let new) = unpack(zip, sha256: sha256.uppercased(), release: release), version(new) == "1.5" else {
-            preconditionFailure("a zip that matches the release unpacks to its Isola.app")
+        let data = (try? Data(contentsOf: zip)) ?? Data()
+        let sha256 = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        // Signed as build.sh signs it, by a throwaway key standing in for the release key.
+        let signer = Curve25519.Signing.PrivateKey(), key = signer.publicKey.rawRepresentation.base64EncodedString()
+        var release = Release(version: "1.5", build: 160, url: sample.url)
+        release.signature = try? signer.signature(for: data).base64EncodedString()
+        guard case .ready(let new) = unpack(zip, sha256: sha256.uppercased(), release: release, key: key), version(new) == "1.5" else {
+            preconditionFailure("a zip that matches the release and its signature unpacks to its Isola.app")
         }
         staged = new
-        if case .ready = unpack(zip, sha256: String(repeating: "0", count: 64), release: release) { preconditionFailure("a zip that doesn't match isn't installed") }
+        var flipped = data
+        flipped[flipped.count / 2] ^= 1
+        precondition(!verify(flipped, signature: release.signature, key: key), "a signature is for those bytes only")
+        if case .ready = unpack(zip, sha256: String(repeating: "0", count: 64), release: release, key: key) { preconditionFailure("a zip that doesn't match isn't installed") }
+        var withoutSignature = release
+        withoutSignature.signature = nil
+        precondition(unpack(zip, sha256: sha256, release: release) == .failed(unsigned) && unpack(zip, sha256: sha256, release: withoutSignature, key: key) == .failed(unsigned),
+                     "nor one another key signed, or none: the download page instead")
         var other = release
         other.version = "1.6"
-        if case .ready = unpack(zip, sha256: sha256, release: other) { preconditionFailure("nor one that isn't the release offered") }
+        if case .ready = unpack(zip, sha256: sha256, release: other, key: key) { preconditionFailure("nor one that isn't the release offered") }
 
         // Restart Isola…: the installed app is replaced, then opened (`true` stands in for open).
         let installed = app("Applications/Isola.app", version: "1.4.7")
@@ -1195,22 +1256,24 @@ struct UpdateView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let notes = release.notes { Text(notes) }
-                    changes("New Features", release.changes?.features)
-                    changes("Bug Fixes", release.changes?.fixes)
-                    changes("Important", release.changes?.important)
+            if release.hasNotes {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if let notes = release.notes { Text(notes) }
+                        changes("New Features", release.changes?.features)
+                        changes("Bug Fixes", release.changes?.fixes)
+                        changes("Important", release.changes?.important)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.quaternary.opacity(0.5)))
             }
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.quaternary.opacity(0.5)))
             HStack(spacing: 10) {
                 progress.font(.callout)
                 Spacer(minLength: 0)
-                if case .ready = updates.phase {
-                    Button("Restart Isola…") { updates.restart() }.keyboardShortcut(.defaultAction)
+                if case .ready = phase {
+                    Button("Restart Isola…") { updates.restart(release) }.keyboardShortcut(.defaultAction)
                 } else {
                     Button("Remind Me Later") {
                         updates.snooze()
@@ -1225,11 +1288,15 @@ struct UpdateView: View {
         .padding(.horizontal, 24)
         .padding(.top, 34)
         .padding(.bottom, 20)
-        .frame(width: 520, height: 460)
+        // Notes scroll in a window of their own size; without any it's just the header and the buttons.
+        .frame(width: 520, height: release.hasNotes ? 460 : nil)
     }
 
+    /// Update Now…'s progress for this release (not another one's).
+    private var phase: Updates.Phase { updates.phase(of: release) }
+
     private var busy: Bool {
-        switch updates.phase {
+        switch phase {
         case .waiting, .downloading, .installing: true
         default: false
         }
@@ -1250,7 +1317,7 @@ struct UpdateView: View {
     }
 
     @ViewBuilder private var progress: some View {
-        switch updates.phase {
+        switch phase {
         case .idle:
             EmptyView()
         case .waiting:
@@ -1300,7 +1367,9 @@ enum UpdateWindow {
         w.titlebarAppearsTransparent = true
         w.titleVisibility = .hidden
         w.isReleasedWhenClosed = false
-        w.contentView = NSHostingView(rootView: UpdateView(release: release) { [weak w] in w?.close() })
+        let host = NSHostingView(rootView: UpdateView(release: release) { [weak w] in w?.close() })
+        w.contentView = host
+        w.setContentSize(host.fittingSize)
         return w
     }
 }
