@@ -408,7 +408,7 @@ struct CalendarPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             Heading(text: list.isEmpty ? CalendarText.dayTitle(day) : "\(CalendarText.dayTitle(day)) · \(CalendarText.events(list.count))")
             if list.isEmpty {
-                Text(day < today ? "No events" : "This day is clear").font(.system(size: 12.5, weight: .semibold))
+                Text(day < today ? "No events" : "Nothing planned yet").font(.system(size: 12.5, weight: .semibold))
             } else {
                 EventRows(events: list, limit: 2, now: now, colors: colors, trailing: day == tomorrow ? .tomorrow : .none, day: day)
             }
