@@ -128,7 +128,7 @@ struct HUDSnapshot {
 /// One HUD's appearance and motion; a plain value so gallery snapshots don't depend on live state.
 struct HUDLook: Equatable {
     var style: HUDProgressStyle = .white
-    var showPercentage = false
+    var showPercentage = true
     var labels = true
     var duration: Double = 1.5
     var speed: AnimationSpeed = .smooth
@@ -143,8 +143,9 @@ struct HUDLook: Equatable {
         return .interpolatingSpring(mass: 1, stiffness: stiffness * f, damping: d * f.squareRoot())
     }
 
-    /// The HUD springing in and out: the island's expand spring, at the HUD's speed.
+    /// The HUD springing in and out: the island's expand and notification-collapse springs, at the HUD's speed.
     @MainActor var motion: Animation { spring(150, 20) }
+    @MainActor var collapse: Animation { spring(150, 16) }
 
     /// The bar filling: LevelBar's spring, at the HUD's speed.
     var fillSpring: Animation {
@@ -152,19 +153,28 @@ struct HUDLook: Equatable {
     }
 
     /// A HUD's saved look. Before each HUD had its own, both shared "hud.style" (bar, percentage
-    /// or decibels), "hud.showLabels" and "hud.duration", and the Display HUD had "hud.glow".
+    /// or decibels), "hud.showLabels" (with labels the number sat in the wing) and "hud.duration",
+    /// moved at the island's "speed", and the Display HUD had "hud.glow".
     static func saved(_ kind: HUDKind) -> HUDLook {
         let key = "hud.\(kind.rawValue)."
         let legacy = store.string(forKey: "hud.style")
+        let labels = load("hud.showLabels", true)
         let style = HUDProgressStyle(rawValue: store.string(forKey: key + "style") ?? "")
-            ?? (kind == .volume ? (legacy == "decibels" ? .decibel : .white) : (load("hud.glow", false) ? .glow : .white))
+            ?? (kind == .volume ? (legacy == "decibels" ? .decibel : .white) : (legacyGlow ? .glow : .white))
         return HUDLook(
             style: style.fits(kind) ? style : .white,
-            showPercentage: load(key + "showPercentage", legacy == "percentage"),
-            labels: load(key + "labels", load("hud.showLabels", true)),
+            showPercentage: load(key + "showPercentage", legacy == "percentage" || labels),
+            labels: load(key + "labels", labels),
             duration: load(key + "duration", load("hud.duration", 1.5)),
-            speed: AnimationSpeed(rawValue: store.string(forKey: key + "speed") ?? "") ?? .smooth
+            speed: AnimationSpeed(rawValue: store.string(forKey: key + "speed") ?? store.string(forKey: "speed") ?? "") ?? .smooth
         )
+    }
+
+    /// "hud.glow" was on unless turned off, so it is settled on the first launch that reads it: an
+    /// install from before (onboarded) keeps the glow, a new one starts White.
+    private static var legacyGlow: Bool {
+        if store.object(forKey: "hud.glow") == nil { store.set(store.bool(forKey: "onboarded"), forKey: "hud.glow") }
+        return store.bool(forKey: "hud.glow")
     }
 
     func save(_ kind: HUDKind) {
@@ -309,7 +319,7 @@ enum HUDModule {
     static func show(_ snapshot: HUDSnapshot) {
         HUDModel.shared.snapshot = snapshot
         let look = HUDPreferences.shared.look(snapshot.kind)
-        Island.shared.post(item(snapshot.kind), duration: look.duration, animation: look.motion)
+        Island.shared.post(item(snapshot.kind), duration: look.duration, animation: look.motion, collapse: look.collapse)
     }
 
     /// Passive path: any volume/mute change on the output device.
@@ -452,10 +462,12 @@ enum HUDModule {
         precondition(!r.volume.labels && !r.brightness.labels && r.brightness.style == .glow, "other settings follow, styles stay")
         r = HUDPreferences.edit(pair, .brightness, \.speed, .instant, linked: false)
         precondition(r.volume.speed == .smooth && r.brightness.speed == .instant, "unlinked: one HUD")
-        // The narrow wing: decibels or nothing with labels (the row below has the bar and the number);
-        // without, the number replaces the bar, and "Mute" shows wherever a number would.
+        // The narrow wing is never blank: the number (the percentage by default) or, without one, a bar;
+        // muted, "Mute" wherever a number would show, unless the label row already says "Muted".
         typealias W = HUDPart.Wing
-        precondition(HUDPart.wing(labels: true, showPercentage: true, decibels: false, silent: false) == W.empty
+        precondition(HUDLook().showPercentage && HUDPart.wing(labels: true, showPercentage: true, decibels: false, silent: false) == W.percent
+            && HUDPart.wing(labels: true, showPercentage: false, decibels: false, silent: false) == W.bar
+            && HUDPart.wing(labels: true, showPercentage: true, decibels: false, silent: true) == W.percent
             && HUDPart.wing(labels: true, showPercentage: false, decibels: true, silent: false) == W.decibels
             && HUDPart.wing(labels: false, showPercentage: false, decibels: false, silent: false) == W.bar
             && HUDPart.wing(labels: false, showPercentage: true, decibels: false, silent: false) == W.percent
@@ -501,7 +513,7 @@ enum HUDModule {
             HUDSnapshot(kind: .volume, level: level, muted: muted, decibels: HUDOutput.approximateDecibels(level), output: .preset(device))
         }
         func brightness(_ level: Double) -> HUDSnapshot { HUDSnapshot(kind: .brightness, level: level) }
-        let compact = HUDLook(labels: false)
+        let compact = HUDLook(showPercentage: false, labels: false)
         add("volume-low", volume(0.19))
         add("volume-mid", volume(0.5))
         add("volume-high", volume(0.94))
@@ -512,27 +524,27 @@ enum HUDModule {
         blue.output.deviceTint = BluetoothMonitor.maxColors[0x03]?.tint
         add("volume-airpodsmax-blue", blue)
         add("volume-notch", volume(0.5), geometry: .notchPreview)
-        // Show percentage: next to the bar under the notch, or instead of it in the wing.
-        add("volume-percent", volume(0.62), HUDLook(showPercentage: true))
-        add("volume-percent-notch", volume(0.62, device: "airpodspro"), HUDLook(showPercentage: true), geometry: .notchPreview)
-        add("volume-percent-muted", volume(0.5, muted: true), HUDLook(showPercentage: true))
+        // Show percentage off: a compact bar holds the wing (the row below keeps its own).
+        add("volume-bar", volume(0.62), HUDLook(showPercentage: false))
+        add("volume-bar-notch", volume(0.62, device: "airpodspro"), HUDLook(showPercentage: false), geometry: .notchPreview)
+        add("volume-bar-muted", volume(0.5, muted: true), HUDLook(showPercentage: false))
         add("style-white-compact", volume(0.5), compact)
         add("style-white-compact-notch", volume(0.5), compact, geometry: .notchPreview)
         add("style-percent-compact", volume(0.75), HUDLook(showPercentage: true, labels: false))
         add("style-percent-muted", volume(0.5, muted: true), HUDLook(showPercentage: true, labels: false))
         add("style-decibel-compact", volume(0.5), HUDLook(style: .decibel, labels: false))
         add("style-decibel-labels", volume(0.5), HUDLook(style: .decibel))
-        add("style-accent-compact", volume(0.5), HUDLook(style: .accent, labels: false))
+        add("style-accent-compact", volume(0.5), HUDLook(style: .accent, showPercentage: false, labels: false))
         add("style-accent-labels", volume(0.66), HUDLook(style: .accent, showPercentage: true))
-        add("style-stylized-compact", volume(0.7), HUDLook(style: .stylized, labels: false))
+        add("style-stylized-compact", volume(0.7), HUDLook(style: .stylized, showPercentage: false, labels: false))
         add("style-stylized-airpodsmax-blue", blue, HUDLook(style: .stylized))
         // Output device › Show speaker symbol: AirPods read as the speaker and "Volume".
         add("output-symbol", volume(0.62, device: "airpodspro"), HUDLook(output: .symbol))
         add("brightness-white", brightness(0.8))
         add("brightness-glow", brightness(0.8), HUDLook(style: .glow))
-        add("brightness-glow-compact", brightness(0.6), HUDLook(style: .glow, labels: false))
+        add("brightness-glow-compact", brightness(0.6), HUDLook(style: .glow, showPercentage: false, labels: false))
         add("brightness-stylized", brightness(0.7), HUDLook(style: .stylized, showPercentage: true))
-        add("brightness-accent-compact-notch", brightness(0.45), HUDLook(style: .accent, labels: false), geometry: .notchPreview)
+        add("brightness-accent-compact-notch", brightness(0.45), HUDLook(style: .accent, showPercentage: false, labels: false), geometry: .notchPreview)
         add("brightness-low", brightness(0.2), HUDLook(style: .glow))
         add("brightness-display-symbol", brightness(0.55), HUDLook(displaySymbol: true))
         add("brightness-compact-notch", brightness(0.7), compact, geometry: .notchPreview)
