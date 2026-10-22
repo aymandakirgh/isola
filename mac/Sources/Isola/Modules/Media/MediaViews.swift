@@ -906,7 +906,7 @@ struct MediaSettingsView: View {
                     ForEach(MediaSourceChoice.allCases) { Text($0.title).tag($0) }
                 }
                 LabeledContent("Now playing", value: sourceDescription)
-                Text("Automatic reads what macOS reports, then Music or Spotify through AppleScript where Automation access is already granted; System reads only what macOS reports. Music or Spotify reads only that app and asks for access once. This only picks where now-playing info is read: whatever the source, liking in Music and copying a Spotify or browser link use AppleScript and ask for access the first time, and bringing up a browser's playing tab uses it where access is already granted.")
+                Text("Automatic reads what macOS reports, then Music or Spotify through AppleScript where Automation access is already granted; System reads what macOS reports. Music or Spotify reads only that app and asks for access once. Whatever the source, liking in Music and copying a Spotify or browser link use AppleScript and ask for access the first time, and where access is already granted it also reads whether the track is a favourite in Music and brings up a browser's playing tab.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
