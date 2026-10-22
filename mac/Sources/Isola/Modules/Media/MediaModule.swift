@@ -669,7 +669,7 @@ enum MediaModule {
                 .background(Color.black)
         }
         // Entries named "*settings" are snapshotted through a hosting view by the core gallery.
-        Gallery.add("media-settings", size: CGSize(width: 520, height: 1650)) {
+        Gallery.add("media-settings", size: CGSize(width: 520, height: 1680)) {
             MediaSettingsView().background(Color(nsColor: .windowBackgroundColor))
         }
 

@@ -754,7 +754,8 @@ struct ExpandedPlayer: View {
 
 // MARK: - Settings
 
-/// Whether the live waveform hears anything: without System Audio Recording access the tap only gets silence.
+/// Whether the live waveform hears anything: without System Audio Recording access the tap only gets silence,
+/// as it does while this Mac plays nothing, so silence alone doesn't mean the access is missing.
 struct AudioAccessRow: View {
     let levels: AudioLevels
 
@@ -765,7 +766,7 @@ struct AudioAccessRow: View {
                 Button("Open Settings…") { NSWorkspace.shared.open(AudioLevels.settingsURL) }
             } label: {
                 Text("Audio access")
-                Text("Isola needs your permission to capture your audio.")
+                Text("No audio heard yet. If you denied System Audio Recording, allow Isola in System Settings.")
             }
         case true?:
             LabeledContent("Audio access") { Label("Allowed", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
@@ -814,7 +815,7 @@ struct MediaSettingsView: View {
                 }
                 Toggle(isOn: $prefs.liveWaveform) {
                     Text("Live waveform")
-                    Text("Captures your audio. The bars follow what's playing, at about 1% CPU; macOS asks for System Audio Recording access the first time.")
+                    Text("The bars follow what this Mac plays, at about 1% CPU; macOS asks for System Audio Recording access the first time.")
                 }
                 .disabled(!prefs.spectrogram)
                 if prefs.spectrogram, prefs.liveWaveform { AudioAccessRow(levels: levels) }
@@ -905,7 +906,7 @@ struct MediaSettingsView: View {
                     ForEach(MediaSourceChoice.allCases) { Text($0.title).tag($0) }
                 }
                 LabeledContent("Now playing", value: sourceDescription)
-                Text("Automatic reads what macOS reports, then Music or Spotify through AppleScript where Automation access is already granted; System never uses AppleScript. Music or Spotify reads only that app and asks for access once. Liking in Music and copying a Spotify or browser link ask for it the first time.")
+                Text("Automatic reads what macOS reports, then Music or Spotify through AppleScript where Automation access is already granted; System reads only what macOS reports. Music or Spotify reads only that app and asks for access once. This only picks where now-playing info is read: whatever the source, liking in Music and copying a Spotify or browser link use AppleScript and ask for access the first time, and bringing up a browser's playing tab uses it where access is already granted.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
