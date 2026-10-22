@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { AppMark } from "../components/AppMark";
 import { InlineLink } from "../components/InlineLink";
-import { BRAND, CONTACT_EMAIL } from "../config";
+import { BRAND, ISSUES_URL } from "../config";
 import { cn } from "../lib/cn";
 import { usePageTransition } from "../lib/router";
 import { Transition } from "../lib/transition";
@@ -18,8 +18,8 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 export default function Privacy() {
   const page = usePageTransition();
   const contact = (
-    <InlineLink href={`mailto:${CONTACT_EMAIL}`} label="Contact us">
-      {CONTACT_EMAIL}
+    <InlineLink href={`${ISSUES_URL}/new`} label="Open an issue on GitHub">
+      GitHub
     </InlineLink>
   );
   return (
@@ -77,13 +77,15 @@ export default function Privacy() {
           <Section title="Your rights">
             You can ask for a copy of what we hold about you, a correction or
             its deletion at any time, and complain to your data protection
-            authority if you think we got it wrong. Just write to {contact}.
+            authority if you think we got it wrong. Open an issue on {contact},
+            leaving your key and e-mail out of it, and we’ll reply with a
+            private way to reach us.
           </Section>
           <h2 className="mb-3 text-2xl font-bold">Have questions?</h2>
           <p className="text-xl">
             If you have questions or suggestions about this privacy policy, feel
             free to{" "}
-            <InlineLink href={`mailto:${CONTACT_EMAIL}`} label="Contact us">
+            <InlineLink href={`${ISSUES_URL}/new`} label="Contact us">
               contact us
             </InlineLink>
             .

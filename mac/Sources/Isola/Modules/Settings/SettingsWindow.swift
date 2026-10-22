@@ -470,7 +470,7 @@ struct AboutPage: View {
             Button("Send Feedback…") { Feedback.send() }
                 .glassButton()
                 .padding(.top, 2)
-            Text("Usually answered within 48 hours").font(.footnote).foregroundStyle(.tertiary)
+            Text("Opens a new issue on GitHub").font(.footnote).foregroundStyle(.tertiary)
         }
         .multilineTextAlignment(.center)
         .padding(.horizontal, 40)
@@ -499,27 +499,26 @@ struct AboutPage: View {
     }
 }
 
-/// Feedback by e-mail, with this build and macOS filled in (About › Send Feedback…, and the menu bar menu).
+/// Feedback as a new GitHub issue, with this build and macOS filled in (About › Send Feedback…, and the menu bar menu).
 @MainActor
 enum Feedback {
-    /// The website's contact address (CONTACT_EMAIL in src/config.ts).
-    static let address = "hello@example.com"
+    /// The repo's issues (ISSUES_URL in src/config.ts).
+    static let issues = "https://github.com/aymandakirgh/isola/issues"
 
     static func send() {
         let info = Bundle.main.infoDictionary
         let version = info?["CFBundleShortVersionString"] as? String ?? "dev", build = info?["CFBundleVersion"] as? String ?? "0"
-        if let url = mail(version: version, build: build, system: ProcessInfo.processInfo.operatingSystemVersionString) {
+        if let url = issue(version: version, build: build, system: ProcessInfo.processInfo.operatingSystemVersionString) {
             NSWorkspace.shared.open(url)
         }
     }
 
-    /// mailto: with a subject and a body that ends in the version line, every character outside
-    /// ASCII letters, digits and -._~ percent-encoded.
-    static func mail(version: String, build: String, system: String) -> URL? {
+    /// A new issue whose body ends in the version line, every character outside ASCII letters,
+    /// digits and -._~ percent-encoded.
+    static func issue(version: String, build: String, system: String) -> URL? {
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
-        func encode(_ text: String) -> String { text.addingPercentEncoding(withAllowedCharacters: allowed) ?? "" }
         let body = "\n\n—\nIsola \(version) (\(build)) · macOS \(system)"
-        return URL(string: "mailto:\(address)?subject=\(encode("Isola feedback"))&body=\(encode(body))")
+        return URL(string: "\(issues)/new?body=\(body.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")")
     }
 }
 

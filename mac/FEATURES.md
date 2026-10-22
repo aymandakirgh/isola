@@ -87,7 +87,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | # | Feature | Status | Seen live | Evidence | Note |
 |---|---|---|---|---|---|
 | 58 | Added opt click support to alternate between activity actions | ✅ Done | ✓ | `Sources/Isola/Modules/System/Power.swift:172; Sources/Isola/Modules/System/Focus.swift:182` | Option-click on charging switches between time to full and "46% · 96 W adapter"; on Focus it opens Focus settings. |
-| 59 | Reworked Alcove to fully match Tahoe style | ✅ Done | ✓ | `Sources/Isola/Modules/Settings/SettingsWindow.swift:176; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:364` | Built with the macOS 27 SDK: Settings and widgets take the Tahoe design, plus Liquid Glass on custom surfaces; seen live on macOS 27. |
+| 59 | Reworked the app to fully match Tahoe style | ✅ Done | ✓ | `Sources/Isola/Modules/Settings/SettingsWindow.swift:176; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:364` | Built with the macOS 27 SDK: Settings and widgets take the Tahoe design, plus Liquid Glass on custom surfaces; seen live on macOS 27. |
 | 60 | Added multiple live activity support | ✅ Done | ✓ | `Sources/Isola/Island/Island.swift:10,24-31,73-76; Sources/Isola/Island/IslandWindows.swift:159-160` | Priority-sorted activity list; swipe down while expanded or middle click cycles. |
 | 61 | Added Dia browser support | 🟡 Partial |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:536` | Dia is activated only: as of mid-2025 it had no AppleScript dictionary. Not installed here to recheck. |
 | 62 | Added sleep focus sound option | 🔶 Built, unverified |  | `Sources/Isola/Modules/System/Focus.swift:57` | Soft sound when Sleep turns on (off by default); telling Sleep apart needs Full Disk Access. |

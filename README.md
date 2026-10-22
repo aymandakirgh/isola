@@ -16,9 +16,17 @@ BASE_URL=http://localhost:4173 npm run test:e2e   # after `npm run preview`
 - **Pages**: FAQs and Changelog (dark theme), Download, Privacy, license Recover (loading / shake / success), Purchased (`/purchased/demo`, mints a demo licence and shows its key).
 - **Choreography**: class-driven `Transition` (`src/lib/transition.tsx`), page leave/enter with theme swap, header buttons that pop in/out and FLIP into place, Figma-style squircle clipping (`src/lib/squircle.ts`).
 
+## Isola for Mac (`mac/`)
+
+The native app the site's Download button ships: a SwiftUI recreation of the notch app (macOS 15+, universal, ad-hoc signed). `mac/scripts/build.sh release` builds the DMG and the signed update zip; `mac/FEATURES.md` tracks every changelog line of the original against this code.
+
+## Feedback
+
+Bugs, ideas and questions: [GitHub Issues](https://github.com/aymandakirgh/isola/issues). Isola is a fictional brand and this project isn't affiliated with the app it recreates.
+
 ## Placeholders
 
-Brand, price, links and contact live in `src/config.ts`; release metadata is in `src/content/releases.ts` (update `size_bytes` when the DMG changes). Payments are a no-charge demo.
+Brand, price and links live in `src/config.ts`; release metadata is in `src/content/releases.ts` (update `size_bytes` when the DMG changes). Payments are a no-charge demo.
 
 ## Licence server (`api/license.ts`)
 
@@ -48,3 +56,7 @@ The app's licence id is random, made once per install and stored next to a salte
 `public/downloads/Isola.dmg` is this build. It is signed ad hoc, not notarized: the first launch needs System Settings → Privacy & Security → Open Anyway (the DMG includes a note).
 
 Now Playing on macOS 15.4+: MediaRemote only answers Apple-signed processes, so `Helpers/MediaRemoteHelper.m` is loaded into `/usr/bin/perl` and streams JSON to the app; Music/Spotify AppleScript is the fallback.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

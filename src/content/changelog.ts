@@ -24,6 +24,17 @@ export const CHANGELOG: { updated: string; entries: Entry[] } = {
         "Stacked live activities, a compact mode for external displays, battery and charging HUDs, and a rebuilt settings window.",
       minors: [
         {
+          version: "1.4.9",
+          date: "22 Oct 2026",
+          note: "Isola is now open source.",
+          features: [
+            "Send Feedback now opens a GitHub issue with your versions filled in",
+          ],
+          fixes: [
+            "Fixed the right-click menu missing on time to leave notifications",
+          ],
+        },
+        {
           version: "1.4.8",
           date: "22 Oct 2026",
           note: "From this version on, updates install themselves.",

@@ -7,12 +7,12 @@ import {
   SHIELD_LOCK_PATH,
 } from "../components/icons";
 import { InlineLink } from "../components/InlineLink";
-import { BRAND, CONTACT_EMAIL, TRIAL } from "../config";
+import { BRAND, ISSUES_URL, TRIAL } from "../config";
 import { cn } from "../lib/cn";
 import { usePageTransition } from "../lib/router";
 import { Transition } from "../lib/transition";
 
-const CONTACT = `mailto:${CONTACT_EMAIL}?body=${encodeURIComponent("Hi,\n\nI checked the FAQs first — here’s my question:\n\n")}`;
+const CONTACT = `${ISSUES_URL}/new?body=${encodeURIComponent("I checked the FAQs first — here’s my question:\n\n")}`;
 const DIM = "dark:text-orange-75/50 text-stone-500";
 
 const symbol = (d: string) => (

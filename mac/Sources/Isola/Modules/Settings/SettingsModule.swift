@@ -88,9 +88,9 @@ enum SettingsModule {
         licensed.back()
         precondition(licensed.step == .permissions && licensed.steps.count == 3, "onboarding: back skips it too")
 
-        let mail = Feedback.mail(version: "1.4.7", build: "151", system: "Version 15.6 (Build 24G84)")
-        let body = mail.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems?.first { $0.name == "body" }?.value
-        precondition(mail?.absoluteString.hasPrefix("mailto:\(Feedback.address)?subject=Isola%20feedback&body=") == true, "feedback: a mailto with a subject")
+        let issue = Feedback.issue(version: "1.4.7", build: "151", system: "Version 15.6 (Build 24G84)")
+        let body = issue.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems?.first { $0.name == "body" }?.value
+        precondition(issue?.absoluteString.hasPrefix("https://github.com/aymandakirgh/isola/issues/new?body=") == true, "feedback: a new GitHub issue")
         precondition(body?.hasSuffix("Isola 1.4.7 (151) · macOS Version 15.6 (Build 24G84)") == true, "feedback: version, build and macOS in the body")
     }
 }
