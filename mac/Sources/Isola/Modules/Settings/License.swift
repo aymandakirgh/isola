@@ -51,6 +51,10 @@ final class License {
     private(set) var now = Date()
     var draft = ""
     var message: String?
+    /// "Licensed to": a name or e-mail typed at activation. It stays in this Mac's preferences and
+    /// is never sent to the licence server, which keeps no e-mail.
+    private(set) var owner: String?
+    var ownerDraft = ""
 
     enum Status: Equatable {
         case trial(remaining: TimeInterval)
@@ -70,6 +74,7 @@ final class License {
 
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var lastReminder = Date.distantPast
+    @ObservationIgnored private var wasExpired = false
     /// Gallery snapshots never talk to the server.
     @ObservationIgnored private var previewing = false
     /// Bumped by every request and every local change: the answer to an older one is dropped.
@@ -100,6 +105,9 @@ final class License {
         pending = newID ? [] : store.data(forKey: "license.pending").flatMap { try? JSONDecoder().decode([Pending].self, from: $0) } ?? []
         devices = (store.data(forKey: "license.devices")).flatMap { try? JSONDecoder().decode([LicensedMac].self, from: $0) } ?? []
         firstLaunch = store.object(forKey: "license.firstLaunch") as? Date ?? Date()
+        let owner = store.string(forKey: "license.owner")
+        self.owner = owner
+        ownerDraft = owner ?? ""
         thisMac = LicensedMac(id: id, name: Host.current().localizedName ?? "This Mac", model: Self.modelIdentifier(), activated: Date())
         store.set(id, forKey: "license.deviceID")
         if let hardware { store.set(hardware, forKey: "license.deviceHardware") }
@@ -108,6 +116,7 @@ final class License {
 
     func start() {
         if store.object(forKey: "license.firstLaunch") == nil { store.set(firstLaunch, forKey: "license.firstLaunch") }
+        Debug.on("license.trialExpired") { _ in TrialExpiredWindow.show() }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
             MainActor.assumeIsolated { License.shared.tick() }
         }
@@ -119,8 +128,12 @@ final class License {
         // At launch, then once a day: a Mac that runs for weeks still tells the server it's in use,
         // which lets any Mac on the key remove one it hasn't heard from in 30 days.
         if now.timeIntervalSince(lastSync) >= 24 * 3600 { refresh() }
+        // The trial ran out just now, or before this launch: the Trial Expired window, once a day at most.
+        let expired = status == .expired
+        if expired, !wasExpired { TrialExpiredWindow.showIfDue() }
+        wasExpired = expired
         // Expired trials keep working, with a gentle reminder every few hours.
-        guard status == .expired, now.timeIntervalSince(lastReminder) > 3 * 3600 else { return }
+        guard expired, now.timeIntervalSince(lastReminder) > 3 * 3600 else { return }
         lastReminder = now
         Island.shared.post(Self.reminder(), duration: 6)
     }
@@ -145,11 +158,13 @@ final class License {
             return
         }
         message = nil
-        Task { await register(candidate) }
+        let owner = ownerDraft
+        Task { await register(candidate, owner: owner) }
     }
 
-    /// Activation, and the sync of a Mac the server doesn't have yet.
-    private func register(_ candidate: String) async {
+    /// Activation, and the sync of a Mac the server doesn't have yet. Only an activation brings
+    /// an owner (empty clears it); a sync leaves it as it is.
+    private func register(_ candidate: String, owner: String? = nil) async {
         // A deactivation of this Mac already on its way would land after this activation and take
         // the Mac off the key again: let it finish first.
         await settling?.value
@@ -163,6 +178,10 @@ final class License {
             key = candidate
             devices = list
             registered = true
+            if let owner {
+                let name = owner.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.owner = name.isEmpty ? nil : name
+            }
             draft = ""
             message = nil
             save()
@@ -280,24 +299,28 @@ final class License {
         firstLaunch = Date()
         store.set(firstLaunch, forKey: "license.firstLaunch")
         message = nil
+        owner = nil
+        ownerDraft = ""
         generation += 1
         save()
         now = Date()
     }
 
     /// For gallery snapshots only.
-    func preview(key: String?, devices: [LicensedMac], firstLaunch: Date, message: String? = nil, serverStatus: String = "ok") {
+    func preview(key: String?, devices: [LicensedMac], firstLaunch: Date, message: String? = nil, serverStatus: String = "ok", owner: String? = nil) {
         previewing = true
         self.key = key
         self.devices = devices
         self.firstLaunch = firstLaunch
         self.message = message
         self.serverStatus = serverStatus
+        self.owner = owner
         now = Date()
     }
 
     private func save() {
         store.set(key, forKey: "license.key")
+        store.set(owner, forKey: "license.owner")
         store.set(try? JSONEncoder().encode(devices), forKey: "license.devices")
         store.set(registered, forKey: "license.registered")
         store.set(try? JSONEncoder().encode(pending), forKey: "license.pending")
@@ -494,6 +517,8 @@ final class License {
         }
         precondition(!mac(90, 29).stale(at: t) && mac(90, 31).stale(at: t), "stale after 30 days unseen")
         precondition(mac(31, nil).stale(at: t) && !mac(29, nil).stale(at: t), "no lastSeen: the activation date stands in")
+        precondition(TrialExpiredWindow.due(last: nil, now: t) && TrialExpiredWindow.due(last: t.addingTimeInterval(-day), now: t)
+            && !TrialExpiredWindow.due(last: t.addingTimeInterval(-day + 60), now: t), "the Trial Expired window: once a day at most")
 
         // This Mac's id: random, and kept on the hardware it was made on.
         let here = hardwareHash("6C1E6F5A-0D1B-4D9E-9C1A-2F4B8E7D3A10"), there = hardwareHash("0F7A2B44-91C3-4E6A-8B25-7D3E1C9A5F60")
@@ -540,6 +565,11 @@ final class License {
                      "which registers before it counts, and leaves the other Mac's id and queue alone")
         precondition(store.string(forKey: "license.deviceID") == copied.thisMac.id && store.string(forKey: "license.deviceHardware") == hardware,
                      "this Mac's from now on")
+
+        // "Licensed to" comes back from this Mac's preferences, and fills the activation field.
+        store.set("alex@example.com", forKey: "license.owner")
+        let named = License(store: store)
+        precondition(named.owner == "alex@example.com" && named.ownerDraft == "alex@example.com", "the owner stays in this Mac's preferences")
     }
 
     private static func modelIdentifier() -> String {
@@ -551,27 +581,87 @@ final class License {
     }
 }
 
-/// Once a day, the website's releases.json against this build: a newer release is
-/// announced in the island (tap to download) unless the prompt is silenced.
+/// Once a day (unless turned off), the website's releases.json against this build: a newer
+/// release is announced in the island unless the prompt is silenced or snoozed. Tapping it, or
+/// Update… in Settings, opens the update window.
 @MainActor @Observable
 final class Updates {
     static let shared = Updates()
     static let feed = URL(string: "https://isola-ruby.vercel.app/releases.json")!
 
-    struct Release: Decodable {
+    /// A release in releases.json. `url` is its download page; `zip` (Isola.app zipped with
+    /// `ditto -c -k --keepParent`) and its `sha256` let Update Now… install it in place.
+    struct Release: Decodable, Equatable {
         var version: String
         var build: Int?
         var url: URL
         var notes: String?
+        var zip: URL?
+        var sha256: String?
+        var changes: Changes?
+    }
+
+    /// What's new, by section of the update window.
+    struct Changes: Decodable, Equatable {
+        var features: [String]?
+        var fixes: [String]?
+        var important: [String]?
+    }
+
+    /// releases.json: the stable release at the top level, an early-bird one under "beta".
+    struct Feed: Decodable {
+        var stable: Release
+        var beta: Release?
+
+        private enum Keys: String, CodingKey { case beta }
+
+        init(from decoder: Decoder) throws {
+            stable = try Release(from: decoder)
+            // A beta that doesn't decode leaves the stable release alone.
+            beta = try? decoder.container(keyedBy: Keys.self).decodeIfPresent(Release.self, forKey: .beta)
+        }
+
+        /// The beta for early birds when it's the newer one, else the stable release.
+        func pick(earlyBird: Bool) -> Release {
+            guard earlyBird, let beta, Updates.isNewer(beta.version, build: beta.build, than: stable.version, build: stable.build) else { return stable }
+            return beta
+        }
+    }
+
+    /// Update Now… → Waiting… → Downloading… → Installing… → ready for Restart Isola….
+    enum Phase: Equatable {
+        case idle, waiting
+        case downloading(Double)
+        case installing
+        /// The new Isola.app, unzipped and checked, waiting in a temporary folder.
+        case ready(URL)
+        case failed(String)
     }
 
     var silenced = UserDefaults.standard.bool(forKey: "updates.silenced") {
         didSet { UserDefaults.standard.set(silenced, forKey: "updates.silenced") }
     }
+    /// Off: no daily check. Check for Updates… still asks.
+    var automatic = UserDefaults.standard.object(forKey: "updates.automatic") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(automatic, forKey: "updates.automatic") }
+    }
+    /// Also offers releases that are still being tested (releases.json's "beta").
+    var earlyBird = UserDefaults.standard.bool(forKey: "updates.earlyBird") {
+        didSet {
+            UserDefaults.standard.set(earlyBird, forKey: "updates.earlyBird")
+            if automatic, Self.current != nil { check() }  // what's on offer changes now, not tomorrow
+        }
+    }
+    /// Remind Me Later: no island prompt until then.
+    private(set) var snoozedUntil = UserDefaults.standard.object(forKey: "updates.snoozedUntil") as? Date {
+        didSet { UserDefaults.standard.set(snoozedUntil, forKey: "updates.snoozedUntil") }
+    }
     private(set) var available: Release?
     private(set) var lastCheck = UserDefaults.standard.object(forKey: "updates.lastCheck") as? Date
     private(set) var failed = false
+    private(set) var phase = Phase.idle
     @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var download: NSKeyValueObservation?
 
     /// This build, e.g. ("1.4.7", 151); nil when running unbundled (gallery, swift run).
     static var current: (version: String, build: Int?)? {
@@ -581,6 +671,20 @@ final class Updates {
     }
 
     func start() {
+        // The update window for a stand-in release (zip= and sha256= make Update Now… real), and the state.
+        Debug.on("update.dialog") { args in
+            var release = Self.sample
+            release.version = args["version"] ?? release.version
+            release.build = args["build"].flatMap(Int.init) ?? release.build
+            release.zip = args["zip"].flatMap(URL.init(string:))
+            release.sha256 = args["sha256"]
+            UpdateWindow.show(release)
+        }
+        Debug.on("update.state") { _ in
+            let u = Updates.shared
+            Debug.reply("automatic=\(u.automatic) earlyBird=\(u.earlyBird) silenced=\(u.silenced) snoozedUntil=\(u.snoozedUntil?.formatted() ?? "none") "
+                + "available=\(u.available?.version ?? "none") phase=\(u.phase)")
+        }
         guard Self.current != nil else { return }
         checkIfDue()
         timer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in
@@ -588,27 +692,152 @@ final class Updates {
         }
     }
 
-    /// Failed checks aren't recorded, so the hourly timer retries them.
+    /// Hourly. Failed checks aren't recorded, so this retries them.
     private func checkIfDue() {
-        if Date().timeIntervalSince(lastCheck ?? .distantPast) >= 24 * 3600 { check() }
+        let due = automatic && Date().timeIntervalSince(lastCheck ?? .distantPast) >= 24 * 3600
+        if let until = snoozedUntil, until <= Date() {
+            snoozedUntil = nil
+            // Remind Me Later is over: the prompt comes back now, unless the check below brings it.
+            if !due, let available, !silenced { Island.shared.post(Self.prompt(available), duration: 8) }
+        }
+        if due { check() }
     }
 
-    func check() {
+    /// `manual` (Check for Updates…) opens the update window when there's one.
+    func check(manual: Bool = false) {
+        let early = earlyBird
         URLSession.shared.dataTask(with: Self.feed) { data, response, _ in
             let ok = (response as? HTTPURLResponse)?.statusCode == 200
-            let release = ok ? data.flatMap { try? JSONDecoder().decode(Release.self, from: $0) } : nil
-            DispatchQueue.main.async { MainActor.assumeIsolated { Updates.shared.received(release) } }
+            let release = ok ? data.flatMap { try? JSONDecoder().decode(Feed.self, from: $0) }?.pick(earlyBird: early) : nil
+            DispatchQueue.main.async { MainActor.assumeIsolated { Updates.shared.received(release, manual: manual) } }
         }.resume()
     }
 
-    private func received(_ release: Release?) {
+    private func received(_ release: Release?, manual: Bool) {
         failed = release == nil
         guard let release, let current = Self.current else { return }
         lastCheck = Date()
         UserDefaults.standard.set(lastCheck, forKey: "updates.lastCheck")
         available = Self.isNewer(release.version, build: release.build, than: current.version, build: current.build) ? release : nil
-        if let available, !silenced { Island.shared.post(Self.prompt(available), duration: 8) }
+        guard let available else { return }
+        if manual {
+            UpdateWindow.show(available)
+        } else if !silenced, !(snoozedUntil.map { $0 > Date() } ?? false) {
+            Island.shared.post(Self.prompt(available), duration: 8)
+        }
     }
+
+    func snooze() {
+        snoozedUntil = Date().addingTimeInterval(24 * 3600)
+    }
+
+    // MARK: - Update Now… and Restart Isola…
+
+    /// Downloads the zip, checks it and unzips it to a temporary folder, ready for Restart Isola….
+    /// Without a zip, or where Isola can't replace itself (a disk image, a folder it can't write),
+    /// it opens the download page instead and returns false.
+    @discardableResult
+    func install(_ release: Release) -> Bool {
+        guard let zip = release.zip, ["https", "file"].contains(zip.scheme), let sha256 = release.sha256, Self.installTarget() != nil else {
+            NSWorkspace.shared.open(release.url)
+            return false
+        }
+        phase = .waiting
+        let task = URLSession.shared.downloadTask(with: zip) { file, response, _ in
+            // The download is deleted when this returns: check and unzip it here, off the main thread.
+            let result: Phase
+            if let file, (response as? HTTPURLResponse)?.statusCode ?? 200 == 200 {
+                DispatchQueue.main.async { MainActor.assumeIsolated { Updates.shared.phase = .installing } }
+                result = Self.unpack(file, sha256: sha256, release: release)
+            } else {
+                result = .failed("Couldn’t download the update. Check your connection and try again.")
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    Updates.shared.download = nil
+                    Updates.shared.phase = result
+                }
+            }
+        }
+        download = task.progress.observe(\.fractionCompleted) { progress, _ in
+            let fraction = progress.fractionCompleted
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let u = Updates.shared
+                    switch u.phase {
+                    case .waiting, .downloading: if fraction > 0 { u.phase = .downloading(fraction) }
+                    default: break
+                    }
+                }
+            }
+        }
+        task.resume()
+        return true
+    }
+
+    /// The zip, checked against the release's SHA-256 and unzipped into a new temporary folder:
+    /// ready when the Isola.app inside is this release.
+    nonisolated static func unpack(_ zip: URL, sha256: String, release: Release) -> Phase {
+        guard let data = try? Data(contentsOf: zip), SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == sha256.lowercased() else {
+            return .failed("The download doesn’t match this release, so it wasn’t installed.")
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Isola-update-\(UUID().uuidString)")
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-x", "-k", zip.path, folder.path]
+        try? ditto.run()
+        ditto.waitUntilExit()
+        let app = folder.appendingPathComponent("Isola.app")
+        let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))
+        guard ditto.terminationStatus == 0, info?["CFBundleIdentifier"] as? String == "app.isola.mac",
+              info?["CFBundleShortVersionString"] as? String == release.version,
+              release.build.map({ String($0) == info?["CFBundleVersion"] as? String }) ?? true else {
+            try? FileManager.default.removeItem(at: folder)
+            return .failed("The download isn’t Isola \(release.version), so it wasn’t installed.")
+        }
+        return .ready(app)
+    }
+
+    /// This Isola.app, if Isola can replace it.
+    nonisolated static func installTarget(_ app: URL = Bundle.main.bundleURL) -> URL? {
+        let files = FileManager.default
+        guard app.pathExtension == "app", files.isWritableFile(atPath: app.path), files.isWritableFile(atPath: app.deletingLastPathComponent().path) else {
+            return nil
+        }
+        return app
+    }
+
+    /// Restart Isola…: the relaunch script takes over, and Isola quits.
+    func restart() {
+        guard case .ready(let app) = phase, let target = Self.installTarget() else { return }
+        do {
+            _ = try Self.swap(app, into: target, after: ProcessInfo.processInfo.processIdentifier, open: "/usr/bin/open")
+            NSApp.terminate(nil)
+        } catch {
+            phase = .failed("Couldn’t restart Isola. Quit it and open it again.")
+        }
+    }
+
+    /// Starts the relaunch script, which outlives Isola: once `pid` has quit it moves the new app
+    /// into place (putting the old one back if that fails) and opens whichever is there.
+    nonisolated static func swap(_ app: URL, into target: URL, after pid: Int32, open: String) throws -> Process {
+        let script = Process()
+        script.executableURL = URL(fileURLWithPath: "/bin/sh")
+        script.arguments = ["-c", relaunch, "isola-update", String(pid), target.path, app.path, open]
+        script.standardError = FileHandle.nullDevice  // a failed mv says so here; the script already handles it
+        try script.run()
+        return script
+    }
+
+    /// $1 the process to wait for, $2 the app to replace, $3 the new app, $4 what opens it.
+    nonisolated static let relaunch = """
+        while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
+        rm -rf "$2.previous"
+        if mv "$2" "$2.previous"; then
+          if mv "$3" "$2"; then rm -rf "$2.previous"; else mv "$2.previous" "$2"; fi
+        fi
+        "$4" "$2"
+        """
 
     /// Dotted versions compare numerically ("1.10" > "1.9", "1.4" == "1.4.0"); the same
     /// version is newer only with a higher build.
@@ -629,8 +858,8 @@ final class Updates {
         }
         .peek(always: true) { PeekLabel("Isola \(release.version) is available") }
         .onTap {
-            NSWorkspace.shared.open(release.url)
             Island.shared.dismissTransient()
+            UpdateWindow.show(release)
         }
     }
 
@@ -638,29 +867,126 @@ final class Updates {
     func preview(_ release: Release?, checked: Date?) {
         available = release
         lastCheck = checked
+        phase = .idle
     }
 
-    static let sample = Release(version: "1.5", build: 160, url: License.website.appendingPathComponent("download"), notes: "Lock Screen widgets and a faster island.")
+    static let sample = Release(
+        version: "1.5", build: 160, url: License.website.appendingPathComponent("download"), notes: "Lock Screen widgets and a faster island.",
+        changes: Changes(
+            features: ["A Frosted style for the Lock Screen player", "Sunrise and sunset times in the weather widget", "Early bird updates, for new versions before everyone else"],
+            fixes: ["The island no longer flickers when a timer ends during a call", "Calendar colours now follow the setting on the Lock Screen"],
+            important: ["Isola restarts once to finish updating."]
+        )
+    )
 
     static func gallery() {
         precondition(isNewer("1.5", build: nil, than: "1.4.7", build: 151) && isNewer("1.4.10", build: nil, than: "1.4.9", build: nil), "newer version")
         precondition(isNewer("1.4.7", build: 152, than: "1.4.7", build: 151) && !isNewer("1.4.7", build: 151, than: "1.4.7", build: 151), "same version, by build")
         precondition(!isNewer("1.4", build: nil, than: "1.4.0", build: nil) && !isNewer("1.3.9", build: 999, than: "1.4", build: 1), "equal or older")
-        let json = #"{"version":"1.4.7","build":151,"url":"https://isola-ruby.vercel.app/download","notes":"..."}"#
-        precondition((try? JSONDecoder().decode(Release.self, from: Data(json.utf8)))?.build == 151, "releases.json shape")
+        // releases.json as published today, then with sections and a beta for early birds.
+        let feed = { (json: String) in try! JSONDecoder().decode(Feed.self, from: Data(json.utf8)) }
+        let today = #"{"version":"1.4.7","build":151,"published_at":"2026-10-09T16:12:00.000Z","minimum_system_version":"15 Sequoia","url":"https://isola-ruby.vercel.app/download"}"#
+        precondition(feed(today).stable.build == 151 && feed(today).beta == nil && feed(today).pick(earlyBird: true).version == "1.4.7", "today's releases.json")
+        let both = #"{"version":"1.4.7","build":151,"url":"https://isola-ruby.vercel.app/download","changes":{"features":["Frosted"],"fixes":["Rain"]},"#
+            + #""beta":{"version":"1.5","build":160,"url":"https://isola-ruby.vercel.app/download","zip":"https://isola-ruby.vercel.app/downloads/Isola-1.5.zip","sha256":"00"}}"#
+        precondition(feed(both).pick(earlyBird: false).version == "1.4.7" && feed(both).pick(earlyBird: true).zip != nil, "early birds get the newer beta")
+        precondition(feed(both).stable.changes == Changes(features: ["Frosted"], fixes: ["Rain"], important: nil), "what's new, by section")
+        precondition(feed(both.replacingOccurrences(of: #""version":"1.5""#, with: #""version":"1.4.6""#)).pick(earlyBird: true).version == "1.4.7",
+                     "an older beta: the stable release")
+        precondition(feed(#"{"version":"1.4.7","url":"https://isola-ruby.vercel.app/download","beta":{"version":"1.5"}}"#).beta == nil,
+                     "a beta that doesn't decode is left out")
+        selfCheckInstall()
+
         Gallery.island("update-available-pill", item: prompt(sample))
         Gallery.island("update-available-notch", item: prompt(sample), geometry: .notchPreview)
+        if let dir = SettingsGallery.directory {
+            let staged = FileManager.default.temporaryDirectory.appendingPathComponent("Isola.app")
+            let phases: [(String, Phase)] = [
+                ("", .idle), ("-waiting", .waiting), ("-downloading", .downloading(0.42)), ("-ready", .ready(staged)),
+                ("-failed", .failed("The download doesn’t match this release, so it wasn’t installed.")),
+            ]
+            for (suffix, phase) in phases {
+                shared.phase = phase
+                SettingsGallery.capture(UpdateWindow.makeWindow(sample), name: "update-window\(suffix)", dir: dir)
+            }
+            shared.phase = .idle
+            var plain = sample
+            plain.changes = nil
+            SettingsGallery.capture(UpdateWindow.makeWindow(plain), name: "update-window-notes", dir: dir)
+        }
+        // SettingsModule's gallery runs this one: the License tab's other windows render here too.
+        License.gallery()
+    }
+
+    /// Update Now… and Restart Isola… on stand-in apps in a scratch folder: a zip that matches is
+    /// unzipped, one that doesn't (or isn't the release offered) is refused, and the script swaps
+    /// the new app in, or keeps the old one when it can't.
+    private static func selfCheckInstall() {
+        let files = FileManager.default
+        let dir = files.temporaryDirectory.appendingPathComponent("isola-update-selfcheck-\(UUID().uuidString)")
+        var staged: URL?
+        defer {
+            try? files.removeItem(at: dir)
+            if let staged { try? files.removeItem(at: staged.deletingLastPathComponent()) }
+        }
+        func app(_ path: String, version: String) -> URL {
+            let app = dir.appendingPathComponent(path)
+            try? files.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+            let info: NSDictionary = ["CFBundleIdentifier": "app.isola.mac", "CFBundleShortVersionString": version, "CFBundleVersion": "160"]
+            info.write(to: app.appendingPathComponent("Contents/Info.plist"), atomically: true)
+            return app
+        }
+        func version(_ app: URL) -> String? {
+            NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))?["CFBundleShortVersionString"] as? String
+        }
+
+        // A release zip, made as the release is: ditto -c -k --keepParent Isola.app.
+        let zip = dir.appendingPathComponent("Isola.zip"), ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-c", "-k", "--keepParent", app("build/Isola.app", version: "1.5").path, zip.path]
+        try? ditto.run()
+        ditto.waitUntilExit()
+        let sha256 = SHA256.hash(data: (try? Data(contentsOf: zip)) ?? Data()).map { String(format: "%02x", $0) }.joined()
+        let release = Release(version: "1.5", build: 160, url: sample.url)
+        guard case .ready(let new) = unpack(zip, sha256: sha256.uppercased(), release: release), version(new) == "1.5" else {
+            preconditionFailure("a zip that matches the release unpacks to its Isola.app")
+        }
+        staged = new
+        if case .ready = unpack(zip, sha256: String(repeating: "0", count: 64), release: release) { preconditionFailure("a zip that doesn't match isn't installed") }
+        var other = release
+        other.version = "1.6"
+        if case .ready = unpack(zip, sha256: sha256, release: other) { preconditionFailure("nor one that isn't the release offered") }
+
+        // Restart Isola…: the installed app is replaced, then opened (`true` stands in for open).
+        let installed = app("Applications/Isola.app", version: "1.4.7")
+        precondition(installTarget(installed) == installed && installTarget(URL(fileURLWithPath: "/System/Applications/Calculator.app")) == nil,
+                     "only an app Isola can replace")
+        (try? swap(new, into: installed, after: 99_999_999, open: "/usr/bin/true"))?.waitUntilExit()
+        precondition(version(installed) == "1.5" && !files.fileExists(atPath: new.path) && !files.fileExists(atPath: installed.path + ".previous"),
+                     "Restart Isola… swaps the new app in")
+        // The new app gone missing: the installed one stays where it is.
+        (try? swap(new, into: installed, after: 99_999_999, open: "/usr/bin/true"))?.waitUntilExit()
+        precondition(version(installed) == "1.5" && !files.fileExists(atPath: installed.path + ".previous"), "a swap that can't happen keeps the app")
     }
 }
 
 /// Settings › License.
 struct LicensePage: View {
     @Bindable var license = License.shared
-    @Bindable var updates = Updates.shared
 
     var body: some View {
         Form {
-            Section { status }
+            Section {
+                status
+                if license.status == .licensed {
+                    LabeledContent("Licensed to") {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            if let owner = license.owner { Text(owner) }
+                            Text(License.mask(license.key)).font(.system(.callout, design: .monospaced)).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
             switch license.status {
             case .licensed:
                 Section {
@@ -683,13 +1009,18 @@ struct LicensePage: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             case .trial, .expired:
-                Section("Activate") {
+                Section {
                     LabeledContent("License key") {
                         TextField("License key", text: $license.draft, prompt: Text("ISOLA-XXXX-XXXX-XXXX"))
                             .labelsHidden()
                             .font(.system(.body, design: .monospaced))
                             .multilineTextAlignment(.trailing)
                             .onSubmit { license.activate(license.draft) }
+                    }
+                    LabeledContent("Name or e-mail") {
+                        TextField("Name or e-mail", text: $license.ownerDraft, prompt: Text("Optional"))
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
                     }
                     HStack {
                         if let message = license.message {
@@ -702,6 +1033,12 @@ struct LicensePage: View {
                             .keyboardShortcut(.defaultAction)
                             .disabled(license.draft.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
+                } header: {
+                    Text("Activate")
+                } footer: {
+                    Text("The name or e-mail is optional: it labels the license here, stays on this Mac and is never sent to the license server.")
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             Section {
@@ -714,25 +1051,7 @@ struct LicensePage: View {
                     }
                 }
             }
-            Section {
-                LabeledContent {
-                    if let release = updates.available {
-                        Link("Download", destination: release.url)
-                    } else {
-                        Button("Check Now") { updates.check() }
-                    }
-                } label: {
-                    Text(updateTitle)
-                    Text(updateDetail)
-                }
-                Toggle("Silence update prompt", isOn: $updates.silenced)
-            } header: {
-                Text("Updates")
-            } footer: {
-                Text("Isola checks once a day and shows a new version in the island. Silenced, it only appears here.")
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            UpdatesSection()
         }
         .formStyle(.grouped)
         // Every time the tab is shown: switching to it, and the Settings window opening on it or
@@ -741,20 +1060,6 @@ struct LicensePage: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
             if let window = note.object as? NSWindow, window === SettingsWindow.window { license.refresh() }
         }
-    }
-
-    private var updateTitle: String {
-        if let release = updates.available { return "Isola \(release.version) is available" }
-        if updates.failed { return "Couldn’t check for updates" }
-        return updates.lastCheck == nil ? "Not checked yet" : "Isola is up to date"
-    }
-
-    /// Release notes when there's an update, else this build and when it was last checked.
-    private var updateDetail: String {
-        if let notes = updates.available?.notes { return notes }
-        let build = Updates.current.map { "Version \($0.version)" + ($0.build.map { " (\($0))" } ?? "") } ?? "Development build"
-        guard let checked = updates.lastCheck else { return build }
-        return "\(build) · checked \(checked.formatted(.relative(presentation: .named)))"
     }
 
     @ViewBuilder private var status: some View {
@@ -825,5 +1130,302 @@ struct StatusRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// License › Updates. Any grouped Form can show it (About too).
+struct UpdatesSection: View {
+    @Bindable var updates = Updates.shared
+
+    var body: some View {
+        Section {
+            LabeledContent {
+                if let release = updates.available {
+                    Button("Update…") { UpdateWindow.show(release) }
+                } else {
+                    Button("Check for Updates…") { updates.check(manual: true) }
+                }
+            } label: {
+                Text(title)
+                Text(detail)
+            }
+            Toggle("Check for updates automatically", isOn: $updates.automatic)
+            Toggle("Early bird updates", isOn: $updates.earlyBird)
+            Toggle("Silence update prompt", isOn: $updates.silenced).disabled(!updates.automatic)
+        } header: {
+            Text("Updates")
+        } footer: {
+            Text((updates.automatic ? "Isola checks once a day and shows a new version in the island. Silenced, it only appears here." : "Isola checks only when you ask.")
+                + " Early bird updates bring new versions while they’re still being tested.")
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var title: String {
+        if let release = updates.available { return "Isola \(release.version) is available" }
+        if updates.failed { return "Couldn’t check for updates" }
+        return updates.lastCheck == nil ? "Not checked yet" : "Isola is up to date"
+    }
+
+    /// Release notes when there's an update, else this build and when it was last checked.
+    private var detail: String {
+        if let notes = updates.available?.notes { return notes }
+        let build = Updates.current.map { "Version \($0.version)" + ($0.build.map { " (\($0))" } ?? "") } ?? "Development build"
+        guard let checked = updates.lastCheck else { return build }
+        return "\(build) · checked \(checked.formatted(.relative(presentation: .named)))"
+    }
+}
+
+/// The update window: what's new, then Remind Me Later, or Update Now… and Restart Isola….
+struct UpdateView: View {
+    var release: Updates.Release
+    @Bindable var updates = Updates.shared
+    var close: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 14) {
+                Image(nsImage: AppIcon.image).resizable().frame(width: 64, height: 64)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Isola \(release.version) is available").font(.title2.bold())
+                    Text(Updates.current.map { "You have version \($0.version)" + ($0.build.map { " (\($0))" } ?? "") + "." } ?? "You have a development build.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let notes = release.notes { Text(notes) }
+                    changes("New Features", release.changes?.features)
+                    changes("Bug Fixes", release.changes?.fixes)
+                    changes("Important", release.changes?.important)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+            }
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.quaternary.opacity(0.5)))
+            HStack(spacing: 10) {
+                progress.font(.callout)
+                Spacer(minLength: 0)
+                if case .ready = updates.phase {
+                    Button("Restart Isola…") { updates.restart() }.keyboardShortcut(.defaultAction)
+                } else {
+                    Button("Remind Me Later") {
+                        updates.snooze()
+                        close()
+                    }
+                    Button("Update Now…") { if !updates.install(release) { close() } }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(busy)
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 34)
+        .padding(.bottom, 20)
+        .frame(width: 520, height: 460)
+    }
+
+    private var busy: Bool {
+        switch updates.phase {
+        case .waiting, .downloading, .installing: true
+        default: false
+        }
+    }
+
+    @ViewBuilder private func changes(_ title: String, _ items: [String]?) -> some View {
+        if let items, !items.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.headline)
+                ForEach(items, id: \.self) { item in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("•").foregroundStyle(.secondary)
+                        Text(item).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var progress: some View {
+        switch updates.phase {
+        case .idle:
+            EmptyView()
+        case .waiting:
+            status("Waiting…", nil)
+        case .downloading(let fraction):
+            status("Downloading…", fraction)
+        case .installing:
+            status("Installing…", nil)
+        case .ready:
+            Text("Ready. Isola restarts to finish updating.").foregroundStyle(.secondary)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.circle.fill").foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func status(_ text: String, _ fraction: Double?) -> some View {
+        HStack(spacing: 8) {
+            if let fraction {
+                ProgressView(value: fraction).frame(width: 120)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            Text(text).foregroundStyle(.secondary)
+        }
+    }
+}
+
+@MainActor
+enum UpdateWindow {
+    private static var window: NSWindow?
+
+    /// From the island prompt, Update… in Settings, and Check for Updates… when it finds one.
+    static func show(_ release: Updates.Release) {
+        window?.close()
+        let w = makeWindow(release)
+        w.center()
+        window = w
+        NSApp.activate()
+        w.makeKeyAndOrderFront(nil)
+    }
+
+    static func makeWindow(_ release: Updates.Release) -> NSWindow {
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 460), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false
+        )
+        w.title = "Isola Update"
+        w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden
+        w.isReleasedWhenClosed = false
+        w.contentView = NSHostingView(rootView: UpdateView(release: release) { [weak w] in w?.close() })
+        return w
+    }
+}
+
+/// Key field and Activate, with Lost your license? and Buy Isola…: activating outside Settings
+/// (the Trial Expired window; an onboarding step can show it too).
+struct LicenseActivationForm: View {
+    @Bindable var license = License.shared
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                TextField("License key", text: $license.draft, prompt: Text("ISOLA-XXXX-XXXX-XXXX"))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .onSubmit { license.activate(license.draft) }
+                Button("Activate") { license.activate(license.draft) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(license.draft.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let message = license.message {
+                Label(message, systemImage: "exclamationmark.circle.fill")
+                    .foregroundStyle(.red)
+                    .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack {
+                Link("Lost your license?", destination: License.website.appendingPathComponent("recover"))
+                Spacer()
+                Button("Buy Isola…") { NSWorkspace.shared.open(License.website) }
+            }
+            .font(.callout)
+        }
+    }
+}
+
+/// "Trial Expired": Isola keeps working, so it only asks; closing it is fine.
+struct TrialExpiredView: View {
+    @Bindable var license = License.shared
+    var close: () -> Void = {}
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(nsImage: AppIcon.image).resizable().frame(width: 80, height: 80)
+            if license.status == .licensed {
+                VStack(spacing: 6) {
+                    Text("Isola is licensed").font(.title2.bold())
+                    Text("Thanks for supporting Isola.").foregroundStyle(.secondary)
+                }
+                Button("Done", action: close).keyboardShortcut(.defaultAction)
+            } else {
+                VStack(spacing: 6) {
+                    Text("Trial Expired").font(.title2.bold())
+                    Text("Your trial has ended. Isola keeps working, but please activate it to support its development.")
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                LicenseActivationForm(license: license)
+            }
+        }
+        .padding(.horizontal, 32)
+        .padding(.top, 36)
+        .padding(.bottom, 24)
+        .frame(width: 420)
+    }
+}
+
+/// Opens when the trial runs out, and at launch while it's over: once a day at most.
+@MainActor
+enum TrialExpiredWindow {
+    private static var window: NSWindow?
+
+    static func showIfDue(now: Date = Date()) {
+        guard due(last: UserDefaults.standard.object(forKey: "license.expiredShown") as? Date, now: now) else { return }
+        UserDefaults.standard.set(now, forKey: "license.expiredShown")
+        show()
+    }
+
+    nonisolated static func due(last: Date?, now: Date) -> Bool {
+        now.timeIntervalSince(last ?? .distantPast) >= 24 * 3600
+    }
+
+    /// In front, without taking the keyboard from the app in use (also `isolactl license.trialExpired`).
+    static func show() {
+        window?.close()
+        let w = makeWindow()
+        w.center()
+        window = w
+        w.orderFrontRegardless()
+    }
+
+    static func makeWindow() -> NSWindow {
+        let w = NSWindow(contentRect: .zero, styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        w.title = "Trial Expired"
+        w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden
+        w.isReleasedWhenClosed = false
+        w.isMovableByWindowBackground = true
+        let host = NSHostingView(rootView: TrialExpiredView { [weak w] in w?.close() })
+        w.contentView = host
+        w.setContentSize(host.fittingSize)
+        return w
+    }
+}
+
+extension License {
+    /// The Trial Expired window and the License page with a name; SettingsGallery renders the rest.
+    static func gallery() {
+        guard let dir = SettingsGallery.directory else { return }
+        let license = License.shared, ended = Date().addingTimeInterval(-80 * 3600)
+        license.preview(key: nil, devices: [], firstLaunch: ended)
+        SettingsGallery.capture(TrialExpiredWindow.makeWindow(), name: "license-trial-expired", dir: dir)
+        license.draft = "ISOLA-7Q4K-2M9X-AAAA"
+        license.preview(key: nil, devices: [], firstLaunch: ended, message: "That doesn’t look like an Isola license key.")
+        SettingsGallery.capture(TrialExpiredWindow.makeWindow(), name: "license-trial-expired-error", dir: dir)
+        license.draft = ""
+        var me = license.thisMac
+        me.activated = Date().addingTimeInterval(-3 * 24 * 3600)
+        license.preview(key: makeKey(seed: 7), devices: [me], firstLaunch: ended, owner: "alex@example.com")
+        SettingsGallery.capture(TrialExpiredWindow.makeWindow(), name: "license-trial-expired-thanks", dir: dir)
+        SettingsGallery.window("settings-license-licensed-owner", section: "license")
+        // Whole pages (the window crops them): licensed with an update on offer, and the trial.
+        Updates.shared.preview(Updates.sample, checked: Date().addingTimeInterval(-2 * 3600))
+        SettingsGallery.snapshot("license-page-licensed", size: CGSize(width: 520, height: 820)) { LicensePage() }
+        Updates.shared.preview(nil, checked: nil)
+        license.preview(key: nil, devices: [], firstLaunch: Date().addingTimeInterval(-10 * 3600))
+        SettingsGallery.snapshot("license-page-trial", size: CGSize(width: 520, height: 820)) { LicensePage() }
     }
 }

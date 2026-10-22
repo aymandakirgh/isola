@@ -6,11 +6,12 @@ private func load<T>(_ key: String, _ fallback: T) -> T { store.object(forKey: "
 private func save(_ key: String, _ value: Any) { store.set(value, forKey: "lockscreen.\(key)") }
 
 enum NowPlayingWidgetStyle: String, CaseIterable, Identifiable {
-    case glass, dark, artwork, clear
+    case glass, frosted, dark, artwork, clear
     var id: String { rawValue }
     var title: String {
         switch self {
         case .glass: "Glass"
+        case .frosted: "Frosted"
         case .dark: "Dark"
         case .artwork: "Artwork"
         case .clear: "Clear"
@@ -19,9 +20,21 @@ enum NowPlayingWidgetStyle: String, CaseIterable, Identifiable {
 }
 
 enum WeatherWidgetStyle: String, CaseIterable, Identifiable {
-    case compact, detailed
+    case conditions, precipitation, sun, compact
     var id: String { rawValue }
-    var title: String { rawValue.capitalized }
+    var title: String {
+        switch self {
+        case .conditions: "Conditions"
+        case .precipitation: "Precipitation"
+        case .sun: "Sunrise & Sunset"
+        case .compact: "Temperature only"
+        }
+    }
+
+    /// A stored value. "detailed", from before these styles, led with the rain outlook.
+    init(stored raw: String) {
+        self = raw == "detailed" ? .precipitation : WeatherWidgetStyle(rawValue: raw) ?? .conditions
+    }
 }
 
 /// Lock Screen settings, persisted under `lockscreen.*` in user defaults.
@@ -39,7 +52,7 @@ final class LockScreenPreferences {
     var nowPlayingStyle: NowPlayingWidgetStyle = NowPlayingWidgetStyle(rawValue: load("nowPlayingStyle", "glass")) ?? .glass {
         didSet { save("nowPlayingStyle", nowPlayingStyle.rawValue) }
     }
-    var weatherStyle: WeatherWidgetStyle = WeatherWidgetStyle(rawValue: load("weatherStyle", "compact")) ?? .compact {
+    var weatherStyle: WeatherWidgetStyle = WeatherWidgetStyle(stored: load("weatherStyle", "conditions")) {
         didSet { save("weatherStyle", weatherStyle.rawValue) }
     }
     /// Points the Now Playing widget moves down (+) or up (−) from its default spot.
@@ -64,7 +77,7 @@ final class LockScreenPreferences {
         case "showConnectivity": showConnectivity = on
         case "showCalendar": showCalendar = on
         case "nowPlayingStyle": nowPlayingStyle = NowPlayingWidgetStyle(rawValue: value) ?? .glass
-        case "weatherStyle": weatherStyle = WeatherWidgetStyle(rawValue: value) ?? .compact
+        case "weatherStyle": weatherStyle = WeatherWidgetStyle(stored: value)
         case "nowPlayingOffset": nowPlayingOffset = Double(value) ?? 0
         case "hideWhileInactive": hideWhileInactive = on
         case "hideInstantly": hideInstantly = on
