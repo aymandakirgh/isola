@@ -417,6 +417,8 @@ enum CalendarModule {
         precondition(titles(CalendarMenu.entries(for: e, meeting: URL(string: "https://meet.google.com/abc"), app: "Calendar"))
             == ["Join Google Meet", "Open in Calendar", "Dismiss Event"], "event menu with a call")
         precondition(titles(CalendarMenu.entries(for: e, meeting: nil, app: "Notion Calendar")) == ["Open in Notion Calendar", "Dismiss Event"], "event menu without")
+        precondition(CalendarItems.leave(e, now: Date()).contextMenu != nil && CalendarItems.leave(e, now: Date()).onOptionTap != nil,
+                     "time to leave has its event's menu and Option-click")
         let cal = Calendar(identifier: .gregorian)
         let t = DateComponents(calendar: cal, year: 2026, month: 10, day: 22, hour: 14, minute: 59, second: 59).date!
         precondition(HourlyChime.nextHour(after: t, calendar: cal) == t.addingTimeInterval(1)

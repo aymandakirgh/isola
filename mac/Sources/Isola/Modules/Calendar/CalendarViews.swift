@@ -52,6 +52,9 @@ enum CalendarItems {
         }
         .peek(always: true) { LeavePeek(event: e, trip: trip) }
         .expanded(size: panelSize) { LiveCalendarPanel() }
+        // Same event, same menu and Option-click as its activity.
+        .onOptionTap { CalendarSource.shared.open(e) }
+        .contextMenu { CalendarMenu.entries(for: e, meeting: CalendarSource.shared.meetingURL(for: e), app: CalendarSource.appName) }
     }
 
     /// Running timer: draining ring + countdown. `snapshot` pins the values (gallery).
