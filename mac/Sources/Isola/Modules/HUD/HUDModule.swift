@@ -166,7 +166,7 @@ struct HUDLook: Equatable {
             showPercentage: load(key + "showPercentage", legacy == "percentage" || labels),
             labels: load(key + "labels", labels),
             duration: load(key + "duration", load("hud.duration", 1.5)),
-            speed: AnimationSpeed(rawValue: store.string(forKey: key + "speed") ?? store.string(forKey: "speed") ?? "") ?? .smooth
+            speed: AnimationSpeed(rawValue: store.string(forKey: key + "speed") ?? legacySpeed) ?? .smooth
         )
     }
 
@@ -175,6 +175,14 @@ struct HUDLook: Equatable {
     private static var legacyGlow: Bool {
         if store.object(forKey: "hud.glow") == nil { store.set(store.bool(forKey: "onboarded"), forKey: "hud.glow") }
         return store.bool(forKey: "hud.glow")
+    }
+
+    /// The island's speed, settled as "hud.speed" on the first launch that reads it: a HUD never set
+    /// keeps it, whatever the island's speed does later. Not a synced key, so settling it never
+    /// overrides another Mac.
+    private static var legacySpeed: String {
+        if store.object(forKey: "hud.speed") == nil { store.set(store.string(forKey: "speed") ?? AnimationSpeed.smooth.rawValue, forKey: "hud.speed") }
+        return store.string(forKey: "hud.speed") ?? ""
     }
 
     func save(_ kind: HUDKind) {
