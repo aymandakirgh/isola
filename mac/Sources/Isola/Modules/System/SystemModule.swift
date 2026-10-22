@@ -117,7 +117,7 @@ enum SystemModule {
             }
         }
         // e.g. `isolactl system.pref hidePercentage=1 deviceThreshold=0.3 deviceImage=symbol mute=Work`
-        // (`mute`/`allow` take a mode's English name or its id).
+        // (`mute`/`allow` take a mode's English name or its id); `isolactl system.state` reads them back.
         Debug.on("system.pref") { a in
             let p = SystemPreferences.shared
             if let v = a["hidePercentage"] { p.hideBatteryPercentage = v == "1" }
@@ -126,7 +126,13 @@ enum SystemModule {
             func id(_ name: String) -> String { FocusMonitor.known.first { $0.value.name == name }?.key ?? name }
             if let v = a["mute"].map(id), !p.focusMutedModes.contains(v) { p.focusMutedModes.append(v) }
             if let v = a["allow"].map(id) { p.focusMutedModes.removeAll { $0 == v } }
-            Debug.reply("hidePercentage=\(p.hideBatteryPercentage) deviceThreshold=\(p.deviceLowBatteryThreshold) deviceImage=\(p.deviceImage.rawValue) muted=\(p.focusMutedModes) seen=\(p.focusSeenModes.keys.sorted())")
+        }
+        Debug.on("system.state") { _ in
+            let p = SystemPreferences.shared
+            Debug.reply(
+                "hidePercentage=\(p.hideBatteryPercentage) deviceThreshold=\(p.deviceLowBatteryThreshold) deviceImage=\(p.deviceImage.rawValue) "
+                    + "focus=\(FocusMonitor.shared.current?.id ?? "off") muted=\(p.focusMutedModes) seen=\(p.focusSeenModes.keys.sorted())"
+            )
         }
         Debug.on("system.lock") { _ in LockMonitor.locked() }
         Debug.on("system.unlock") { _ in LockMonitor.unlocked() }

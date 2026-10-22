@@ -208,7 +208,7 @@ enum CalendarModule {
             CalendarSource.shared.postLeave(event, now: Date(), travel: travel)
         }
         // e.g. isolactl cal.pref colors=0 travelMode=walking leaveBuffer=10 peek=start peekDuration=5 hideDuring=1
-        // monthView=1 dots=1 coloredDots=1 chime=1 eventSound=1 alertSound=1 leaveDuration=10 (replies with them all)
+        // monthView=1 dots=1 coloredDots=1 chime=1 eventSound=1 alertSound=1 leaveDuration=10 (`cal.state` reads them back)
         Debug.on("cal.pref") { args in
             let p = CalendarPreferences.shared
             func on(_ key: String) -> Bool? { args[key].map { $0 == "1" } }
@@ -225,32 +225,33 @@ enum CalendarModule {
             if let v = on("eventSound") { p.eventSound = v }
             if let v = on("alertSound") { p.notificationSound = v }
             if let v = args["leaveDuration"].flatMap(Double.init) { p.leaveDuration = v }
-            Debug.reply(
-                "peek=\(p.peekTiming.rawValue) peekDuration=\(p.peekDuration) hideDuring=\(p.hideDuringEvents) monthView=\(p.monthView) dots=\(p.eventIndicators) "
-                    + "coloredDots=\(p.coloredIndicators) chime=\(p.hourlyChime) next=\(HourlyChime.next.map { CalendarText.time($0) } ?? "none") "
-                    + "eventSound=\(p.eventSound) alertSound=\(p.notificationSound) leaveDuration=\(p.leaveDuration)"
-            )
         }
-        // The right-click menu of what the island shows (`isolactl cal.menu`), and `run=<title>` picks an entry.
-        Debug.on("cal.menu") { args in
-            guard let entries = CalendarMenu.current() else { return Debug.reply("no calendar menu for \(Island.shared.current?.id ?? "nothing")") }
-            var titles: [String] = []
-            for case let .action(title, _, _, _, run) in entries {
-                titles.append(title)
-                if title == args["run"] { run() }
+        // The right-click menu of what the island shows: `cal.menu.state` lists it, `cal.menu run=<title>` picks an entry.
+        Debug.on("cal.menu.state") { _ in
+            let titles = (CalendarMenu.current() ?? []).compactMap { entry -> String? in
+                guard case let .action(title, _, _, _, _) = entry else { return nil }
+                return title
             }
-            Debug.reply(titles.joined(separator: " | "))
+            Debug.reply(titles.isEmpty ? "no calendar menu for \(Island.shared.current?.id ?? "nothing")" : titles.joined(separator: " | "))
+        }
+        Debug.on("cal.menu") { args in
+            for case let .action(title, _, _, _, run) in CalendarMenu.current() ?? [] where title == args["run"] { run() }
         }
         // Pick a day in the expanded calendar: `offset=1` is tomorrow, `offset=none` goes back to today.
         Debug.on("cal.day") { args in
             let today = Calendar.current.startOfDay(for: Date())
             CalendarModel.shared.selectedDay = args["offset"].flatMap(Int.init).flatMap { Calendar.current.date(byAdding: .day, value: $0, to: today) }
-            Debug.reply("selected=\(CalendarModel.shared.selectedDay.map { CalendarText.dayTitle($0) } ?? "today")")
         }
         Debug.on("cal.chime") { _ in CalendarSounds.chime() }
         Debug.on("cal.state") { _ in
-            let state = CalendarState.shared
-            Debug.reply("authorized=\(state.authorized) today=\(state.today.count) location=\(Weather.shared.locationAuthorized) travel: \(TravelTime.shared.report)")
+            let state = CalendarState.shared, p = CalendarPreferences.shared, model = CalendarModel.shared
+            Debug.reply(
+                "authorized=\(state.authorized) today=\(state.today.count) loaded=\(model.events.count) following=\(CalendarSource.shared.shown?.title ?? "none") "
+                    + "picked=\(model.selectedDay.map { CalendarText.dayTitle($0) } ?? "today") location=\(Weather.shared.locationAuthorized) "
+                    + "peek=\(p.peekTiming.rawValue)/\(Int(p.peekDuration))s hideDuring=\(p.hideDuringEvents) monthView=\(p.monthView) "
+                    + "dots=\(p.eventIndicators)/\(p.coloredIndicators ? "colored" : "plain") chime=\(HourlyChime.next.map { CalendarText.time($0) } ?? "off") "
+                    + "eventSound=\(p.eventSound) alertSound=\(p.notificationSound) leaveDuration=\(Int(p.leaveDuration))s travel: \(TravelTime.shared.report)"
+            )
         }
         Debug.on("cal.clear") { _ in
             CalendarModel.shared.debugEvents = []

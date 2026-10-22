@@ -421,7 +421,7 @@ enum HUDModule {
             DistributedNotificationCenter.default().postNotificationName(BetterDisplayOSD.notification, object: json, userInfo: nil, deliverImmediately: true)
         }
         // A settings edit as the HUDs page makes it (Link applies): `hud.pref kind=brightness style=glow
-        // percent=1 labels=0 speed=fast duration=3`; `linked=0|1`, `output=symbol|device`. Replies with both looks.
+        // percent=1 labels=0 speed=fast duration=3`; `linked=0|1`, `output=symbol|device`. `hud.state` reads both looks.
         Debug.on("hud.pref") { args in
             let hud = HUDPreferences.shared
             let kind = args["kind"].flatMap(HUDKind.init(rawValue:)) ?? .volume
@@ -432,8 +432,11 @@ enum HUDModule {
             if let v = args["speed"].flatMap(AnimationSpeed.init(rawValue:)) { hud.edit(kind, \.speed, v) }
             if let v = args["duration"].flatMap(Double.init) { hud.edit(kind, \.duration, v) }
             if let v = args["output"].flatMap(HUDOutputStyle.init(rawValue:)) { hud.outputStyle = v }
+        }
+        Debug.on("hud.state") { _ in
+            let hud = HUDPreferences.shared
             func describe(_ l: HUDLook) -> String { "\(l.style.rawValue) percent=\(l.showPercentage) labels=\(l.labels) speed=\(l.speed.rawValue) duration=\(l.duration)" }
-            Debug.reply("linked=\(hud.linked) output=\(hud.outputStyle.rawValue) | sound: \(describe(hud.volume)) | display: \(describe(hud.brightness))")
+            Debug.reply("linked=\(hud.linked) output=\(hud.outputStyle.rawValue) | sound: \(describe(hud.look(.volume))) | display: \(describe(hud.look(.brightness)))")
         }
     }
 
