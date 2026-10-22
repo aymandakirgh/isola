@@ -130,7 +130,7 @@ final class StatusItem: NSObject, NSMenuDelegate {
         }
     }
 
-    private static func item(for entry: MenuEntry) -> NSMenuItem {
+    static func item(for entry: MenuEntry) -> NSMenuItem {
         switch entry {
         case .separator:
             return .separator()
