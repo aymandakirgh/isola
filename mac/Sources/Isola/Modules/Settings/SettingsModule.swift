@@ -36,6 +36,9 @@ enum SettingsModule {
             Debug.reply("key=\(License.mask(l.key)) server=\(l.serverStatus) registered=\(l.registered) devices=\(l.devices.count) pending=\(l.pendingDeactivations)")
         }
         Debug.on("update.check") { _ in Updates.shared.check() }
+        // Update Now… and Restart Isola… for the release the last check found.
+        Debug.on("update.install") { _ in if let r = Updates.shared.available { Updates.shared.install(r) } }
+        Debug.on("update.restart") { _ in if let r = Updates.shared.available { Updates.shared.restart(r) } }
         Debug.on("update.prompt") { a in
             var release = Updates.sample
             release.version = a["version"] ?? release.version

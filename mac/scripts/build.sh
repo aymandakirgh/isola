@@ -4,8 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG=${1:-release}
-VERSION=${ISOLA_VERSION:-1.4.7}
-BUILD=${ISOLA_BUILD:-151}
+VERSION=${ISOLA_VERSION:-1.4.8}
+BUILD=${ISOLA_BUILD:-152}
 # Release builds are universal (Apple silicon + Intel); debug builds stay native.
 ARCHS=(); [[ "$CONFIG" == release ]] && ARCHS=(--arch arm64 --arch x86_64)
 # ${ARCHS[@]+...}: bash 3.2 treats an empty array as unbound under set -u.

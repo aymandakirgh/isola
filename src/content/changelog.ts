@@ -24,6 +24,26 @@ export const CHANGELOG: { updated: string; entries: Entry[] } = {
         "Stacked live activities, a compact mode for external displays, battery and charging HUDs, and a rebuilt settings window.",
       minors: [
         {
+          version: "1.4.8",
+          date: "22 Oct 2026",
+          note: "From this version on, updates install themselves.",
+          features: [
+            "Added colour styles, a title badge and custom controls to Now Playing",
+            "Added a right-click menu to the island",
+            "Added a look per HUD, with progress styles and the output device",
+            "Added calendar peeks, time left, a month view and an hourly chime",
+            "Added warning levels and allowed Focus modes to notifications",
+            "Added a Frosted lock screen card and Sunrise & Sunset weather",
+          ],
+          fixes: [
+            "Fixed swipe up dismissing activities with dismissing turned off",
+            "Fixed HUDs showing an empty wing without a percentage",
+            "Fixed the calendar agenda running into the blur",
+            "Fixed swiped-away tracks coming back from their player",
+            "Fixed sunrise and sunset in other time zones",
+          ],
+        },
+        {
           version: "1.4.7",
           date: "9 Oct 2026",
           note: null,
