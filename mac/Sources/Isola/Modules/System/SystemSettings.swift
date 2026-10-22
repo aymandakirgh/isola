@@ -57,10 +57,11 @@ final class SystemPreferences {
         didSet { store.set(deviceLowBattery, forKey: "system.deviceLowBattery") }
     }
     /// Devices' own first warning level (0...1), the Mac's until set; their second one fires at 10% too.
-    var deviceLowBatteryThreshold = store.object(forKey: "system.deviceLowBatteryThreshold") as? Double
-        ?? store.object(forKey: "system.lowBatteryThreshold") as? Double ?? 0.2 {
-        didSet { store.set(deviceLowBatteryThreshold, forKey: "system.deviceLowBatteryThreshold") }
+    var deviceLowBatteryThreshold: Double {
+        get { deviceLevel ?? lowBatteryThreshold }
+        set { deviceLevel = newValue; store.set(newValue, forKey: "system.deviceLowBatteryThreshold") }
     }
+    private var deviceLevel = store.object(forKey: "system.deviceLowBatteryThreshold") as? Double
     var deviceLowBatterySound = flag("system.deviceLowBatterySound", true) {
         didSet { store.set(deviceLowBatterySound, forKey: "system.deviceLowBatterySound"); if deviceLowBatterySound { Sounds.lowBattery() } }
     }
