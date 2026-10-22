@@ -387,6 +387,8 @@ enum CalendarModule {
         let later = busyWeek.filter { $0.start >= tomorrow }
         Gallery.island("calendar-expanded-tomorrow", item: CalendarItems.event(review, panel: panelWith(later, card: false, at: late)), expanded: true)
         Gallery.island("calendar-expanded-tomorrow-weather", item: CalendarItems.event(review, panel: panelWith(later, at: late)), expanded: true)
+        // The month view under today's all-day chip has no room for the heading: tomorrow's rows go on without it.
+        Gallery.island("calendar-expanded-tomorrow-month", item: CalendarItems.event(review, panel: panelWith([events[0]] + later, monthView: true, card: false, at: late), size: month), expanded: true)
         // A picked day: its events, or a day with none.
         Gallery.island("calendar-expanded-picked", item: CalendarItems.event(review, panel: panelWith(busyWeek, selected: tomorrow)), expanded: true)
         Gallery.island("calendar-expanded-picked-clear", item: CalendarItems.event(review, panel: panelWith(busyWeek, selected: Calendar.current.date(byAdding: .day, value: 2, to: day)!)), expanded: true)
