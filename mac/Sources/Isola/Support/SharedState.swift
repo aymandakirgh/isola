@@ -131,6 +131,8 @@ final class WeatherState {
     var condition = ""
     var precipitationChance: Double?  // 0...1
     var precipitationDetail: String?  // "Rain at 18:00 · 60%"; nil when the next hours stay dry
+    var sunrise: [Date] = []  // the forecast's days, from today
+    var sunset: [Date] = []
     var place = ""
     var displayTemperature: String {
         let t = useFahrenheit ? temperature * 9 / 5 + 32 : temperature

@@ -57,7 +57,7 @@ final class Weather: NSObject, CLLocationManagerDelegate {
     }
 
     func fetch(latitude: Double, longitude: Double, place: String) async {
-        let url = URL(string: "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&current=temperature_2m,weather_code,precipitation,is_day&hourly=precipitation_probability,weather_code&forecast_hours=12&timezone=auto&timeformat=unixtime")!
+        let url = URL(string: "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&current=temperature_2m,weather_code,precipitation,is_day&hourly=precipitation_probability,weather_code&forecast_hours=12&daily=sunrise,sunset&timezone=auto&timeformat=unixtime")!
         guard let (data, _) = try? await URLSession.shared.data(from: url),
               let forecast = try? JSONDecoder().decode(Forecast.self, from: data) else { return }
         let w = WeatherState.shared
@@ -69,6 +69,8 @@ final class Weather: NSObject, CLLocationManagerDelegate {
         let chances = (forecast.hourly?.precipitation_probability ?? []).compactMap { $0 }
         w.precipitationChance = chances.max().map { Double($0) / 100 }
         w.precipitationDetail = Self.rainOutlook(forecast, now: Date())
+        w.sunrise = Self.dates(forecast.daily?.sunrise)
+        w.sunset = Self.dates(forecast.daily?.sunset)
         w.place = place
         w.available = true
     }
@@ -93,6 +95,11 @@ final class Weather: NSObject, CLLocationManagerDelegate {
         return "\(kind) \(when)" + (run.compactMap(\.chance).max().map { " · \($0)%" } ?? "")
     }
 
+    /// Daily unix times; a day without one (polar day or night) is left out.
+    private static func dates(_ times: [Int?]?) -> [Date] {
+        (times ?? []).compactMap { $0.map { Date(timeIntervalSince1970: TimeInterval($0)) } }
+    }
+
     /// Runs with the gallery (`Isola --gallery`): the rain outlook from canned Open-Meteo JSON.
     static func selfCheck() {
         func outlook(_ chances: String, _ codes: String) -> String? {
@@ -106,6 +113,10 @@ final class Weather: NSObject, CLLocationManagerDelegate {
         precondition(outlook("[50,20,0,0,0,0,0,0]", "[80,3,3,3,3,3,3,3]") == "Showers now · 50%")
         precondition(outlook("[null,null,null,null,null,null,null,null]", "[2,2,95,2,2,2,2,2]") == "Thunderstorm at 16:00")
         precondition(outlook("[0,10,20,10,0,0,0,0]", "[2,2,3,3,2,2,2,2]") == nil)
+        // Sunrise and sunset come as unix times per day; a missing one (polar night) is skipped.
+        let daily = #"{"current":{"temperature_2m":4,"weather_code":0,"is_day":0},"daily":{"time":[1792533600,1792620000],"sunrise":[1792561200,null],"sunset":[1792600140,1792686480]}}"#
+        let sun = try! JSONDecoder().decode(Forecast.self, from: Data(daily.utf8)).daily
+        precondition(dates(sun?.sunrise) == [Date(timeIntervalSince1970: 1_792_561_200)] && dates(sun?.sunset).count == 2, "daily sunrise and sunset")
     }
 
     static func applyUnit() {
@@ -147,9 +158,15 @@ private struct Forecast: Decodable {
         let precipitation_probability: [Int?]?
         let weather_code: [Int?]?
     }
+    /// One entry per day from today, in unix seconds.
+    struct Daily: Decodable {
+        let sunrise: [Int?]?
+        let sunset: [Int?]?
+    }
     let timezone: String?
     let current: Current
     let hourly: Hourly?
+    let daily: Daily?
 }
 
 /// WMO weather interpretation codes → SF Symbol + short condition.

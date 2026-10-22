@@ -45,6 +45,20 @@ struct LockWeather {
     var precipitation: Double?
     /// "Rain at 18:00 · 60%" when rain is coming.
     var rain: String?
+    /// The next sunrise or sunset, for the Sunrise & Sunset style.
+    var sun: SunEvent?
+}
+
+struct SunEvent: Equatable {
+    var rise: Bool
+    var time: Date
+
+    /// The soonest sunrise or sunset after `now`.
+    static func next(sunrises: [Date], sunsets: [Date], after now: Date) -> SunEvent? {
+        (sunrises.map { SunEvent(rise: true, time: $0) } + sunsets.map { SunEvent(rise: false, time: $0) })
+            .filter { $0.time > now }
+            .min { $0.time < $1.time }
+    }
 }
 
 struct LockFocus {
@@ -72,7 +86,10 @@ struct LockScreenData {
                 : nil,
             focus: f.active ? LockFocus(name: f.name.isEmpty ? "Focus" : f.name, symbol: f.symbol) : nil,
             weather: w.available
-                ? LockWeather(symbol: w.symbol, temperature: w.displayTemperature, condition: w.condition, precipitation: w.precipitationChance, rain: w.precipitationDetail)
+                ? LockWeather(
+                    symbol: w.symbol, temperature: w.displayTemperature, condition: w.condition, precipitation: w.precipitationChance,
+                    rain: w.precipitationDetail, sun: .next(sunrises: w.sunrise, sunsets: w.sunset, after: date)
+                )
                 : nil,
             battery: p.hasBattery ? LockBattery(level: p.level, charging: p.charging, timeToEmpty: p.timeToEmpty) : nil,
             devices: DevicesState.shared.devices,
@@ -92,7 +109,10 @@ struct LockScreenData {
     @MainActor static let sample = LockScreenData(
         track: LockTrack(title: "Ocean City", artist: "Pacific Coliseum", artwork: sampleArtwork, isPlaying: true, elapsed: 47, duration: 214),
         focus: LockFocus(name: "Work", symbol: "briefcase.fill"),
-        weather: LockWeather(symbol: "sun.max.fill", temperature: "24°", condition: "Sunny", precipitation: 0.4, rain: "Showers at 18:00 · 40%"),
+        weather: LockWeather(
+            symbol: "sun.max.fill", temperature: "24°", condition: "Sunny", precipitation: 0.4, rain: "Showers at 18:00 · 40%",
+            sun: SunEvent(rise: false, time: Calendar.current.date(bySettingHour: 18, minute: 42, second: 0, of: Date()) ?? Date())
+        ),
         battery: LockBattery(level: 0.82, charging: false, timeToEmpty: 214),
         devices: [ConnectedDevice(id: "sample", name: "Earbuds Pro", symbol: "airpodspro", battery: 0.76, caseBattery: 0.9)],
         event: CalendarEvent(
@@ -122,7 +142,7 @@ struct LockScreenOptions {
     var showConnectivity = true
     var showCalendar = true
     var style: NowPlayingWidgetStyle = .glass
-    var weatherStyle: WeatherWidgetStyle = .compact
+    var weatherStyle: WeatherWidgetStyle = .conditions
     var offset: Double = 0
     var showVolume = false
     /// Calendar › "Use calendar colours".
@@ -355,12 +375,12 @@ struct NowPlayingWidget: View {
 
     @ViewBuilder private var background: some View {
         switch style {
-        case .glass:
+        case .glass, .frosted:
             ZStack {
                 if gallery {
-                    LockPalette.stone900.opacity(0.42)
-                } else if #available(macOS 26, *) {
-                    // Tahoe: Liquid Glass instead of the older blur material.
+                    LockPalette.stone900.opacity(style == .glass ? 0.42 : 0.6)
+                } else if style == .glass, #available(macOS 26, *) {
+                    // Tahoe: Liquid Glass. Frosted keeps the blur material on every version.
                     Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
                 } else {
                     Rectangle().fill(.ultraThinMaterial)
@@ -418,17 +438,21 @@ struct LockInfoRow: View {
                 item(focus.symbol) { Text(focus.name) }
             }
             if options.showWeather, let weather = data.weather {
-                item(weather.symbol) {
-                    Text(weather.temperature)
-                    if options.weatherStyle == .detailed {
-                        // Rain on the way replaces the condition word (the symbol still shows it).
-                        if let rain = weather.rain {
-                            Label(rain, systemImage: "drop.fill").labelStyle(.titleAndIcon).opacity(0.8)
-                        } else {
+                if options.weatherStyle == .sun, let sun = weather.sun {
+                    item(sun.rise ? "sunrise.fill" : "sunset.fill") { Text(sun.time.formatted(date: .omitted, time: .shortened)) }
+                } else {
+                    item(weather.symbol) {
+                        Text(weather.temperature)
+                        switch options.weatherStyle {
+                        case .conditions, .sun:  // Sun without times (none fetched yet) shows the conditions
                             Text(weather.condition).opacity(0.8)
-                            if let p = weather.precipitation {
-                                Label("\(Int((p * 100).rounded()))%", systemImage: "drop.fill").labelStyle(.titleAndIcon).opacity(0.8)
+                        case .precipitation:
+                            // The rain on its way, else the chance of any in the next hours.
+                            if let rain = weather.rain ?? weather.precipitation.map({ "\(Int(($0 * 100).rounded()))%" }) {
+                                Label(rain, systemImage: "drop.fill").labelStyle(.titleAndIcon).opacity(0.8)
                             }
+                        case .compact:
+                            EmptyView()
                         }
                     }
                 }

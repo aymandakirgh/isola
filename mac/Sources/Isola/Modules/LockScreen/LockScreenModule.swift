@@ -22,6 +22,19 @@ enum LockScreenModule {
         }
         Debug.on("lock.preview") { LockScreenController.shared.preview($0["on"] != "0") }
         Debug.on("lock.pref") { args in for (k, v) in args { LockScreenPreferences.shared.set(k, v) } }
+        // Sun times without a forecast, in minutes from now: `lock.sun rise=600 set=45`.
+        Debug.on("lock.sun") { args in
+            let w = WeatherState.shared, now = Date()
+            w.sunrise = args["rise"].flatMap(Double.init).map { [now.addingTimeInterval($0 * 60)] } ?? []
+            w.sunset = args["set"].flatMap(Double.init).map { [now.addingTimeInterval($0 * 60)] } ?? []
+            w.available = true
+        }
+        Debug.on("lock.state") { _ in
+            let p = LockScreenPreferences.shared, w = WeatherState.shared
+            let sun = SunEvent.next(sunrises: w.sunrise, sunsets: w.sunset, after: Date())
+            let next = sun.map { "\($0.rise ? "sunrise" : "sunset")@\($0.time.formatted(date: .omitted, time: .shortened))" } ?? "none"
+            Debug.reply("nowPlayingStyle=\(p.nowPlayingStyle.rawValue) weatherStyle=\(p.weatherStyle.rawValue) sun=\(next)")
+        }
     }
 
     static func registerSettings() {
@@ -32,7 +45,18 @@ enum LockScreenModule {
 
     static func gallery() {
         registerSettings()
+        selfCheck()
         LockScreenGallery.register()
+    }
+
+    static func selfCheck() {
+        let t = Date(timeIntervalSince1970: 1_792_600_000), hour: TimeInterval = 3600
+        let rises = [t.addingTimeInterval(-10 * hour), t.addingTimeInterval(14 * hour)], sets = [t.addingTimeInterval(hour / 2), t.addingTimeInterval(24.5 * hour)]
+        precondition(SunEvent.next(sunrises: rises, sunsets: sets, after: t) == SunEvent(rise: false, time: sets[0]), "by day: tonight's sunset")
+        precondition(SunEvent.next(sunrises: rises, sunsets: sets, after: sets[0]) == SunEvent(rise: true, time: rises[1]), "once it's set: tomorrow's sunrise")
+        precondition(SunEvent.next(sunrises: [t], sunsets: [], after: t) == nil, "nothing ahead, nothing shown")
+        precondition(WeatherWidgetStyle(stored: "detailed") == .precipitation && WeatherWidgetStyle(stored: "sun") == .sun
+            && WeatherWidgetStyle(stored: "compact") == .compact && WeatherWidgetStyle(stored: "?") == .conditions, "stored weather styles")
     }
 }
 
@@ -145,8 +169,9 @@ private enum LockScreenGallery {
         let screen = CGSize(width: 2560, height: 1440)
         let full: [(String, LockScreenOptions)] = [
             ("lockscreen-full", LockScreenOptions()),
-            ("lockscreen-full-dark-detailed", LockScreenOptions(style: .dark, weatherStyle: .detailed, showVolume: true)),
+            ("lockscreen-full-dark-precipitation", LockScreenOptions(style: .dark, weatherStyle: .precipitation, showVolume: true)),
             ("lockscreen-full-artwork", LockScreenOptions(style: .artwork, offset: -40)),
+            ("lockscreen-full-frosted-sun", LockScreenOptions(style: .frosted, weatherStyle: .sun)),
         ]
         for (name, options) in full {
             Gallery.add(name, size: CGSize(width: 1280, height: 720)) {
@@ -163,6 +188,7 @@ private enum LockScreenGallery {
         paused.track?.isPlaying = false
         let cards: [(String, NowPlayingWidget)] = [
             ("lockscreen-nowplaying-glass", NowPlayingWidget(track: s.track)),
+            ("lockscreen-nowplaying-frosted", NowPlayingWidget(track: s.track, style: .frosted)),
             ("lockscreen-nowplaying-dark", NowPlayingWidget(track: s.track, style: .dark)),
             ("lockscreen-nowplaying-artwork", NowPlayingWidget(track: s.track, style: .artwork)),
             ("lockscreen-nowplaying-clear", NowPlayingWidget(track: s.track, style: .clear)),
@@ -176,11 +202,17 @@ private enum LockScreenGallery {
             Gallery.add(name, size: CGSize(width: 420, height: 280)) { backdrop { card } }
         }
 
-        Gallery.add("lockscreen-info-compact", size: CGSize(width: 1040, height: 90)) {
-            backdrop { LockInfoRow(data: s, options: LockScreenOptions()) }
-        }
-        Gallery.add("lockscreen-info-detailed", size: CGSize(width: 1240, height: 90)) {
-            backdrop { LockInfoRow(data: s, options: LockScreenOptions(weatherStyle: .detailed)) }
+        var dry = s, sunrise = s
+        dry.weather?.rain = nil
+        sunrise.weather?.sun = SunEvent(rise: true, time: Calendar.current.date(bySettingHour: 6, minute: 58, second: 0, of: Date()) ?? Date())
+        let weather: [(String, LockScreenData, WeatherWidgetStyle)] = [
+            ("conditions", s, .conditions), ("precipitation", s, .precipitation), ("precipitation-dry", dry, .precipitation),
+            ("sunset", s, .sun), ("sunrise", sunrise, .sun), ("compact", s, .compact),
+        ]
+        for (name, data, style) in weather {
+            Gallery.add("lockscreen-info-\(name)", size: CGSize(width: 1240, height: 90)) {
+                backdrop { LockInfoRow(data: data, options: LockScreenOptions(weatherStyle: style)) }
+            }
         }
         Gallery.add("lockscreen-info-nocolor", size: CGSize(width: 1040, height: 90)) {
             backdrop { LockInfoRow(data: s, options: LockScreenOptions(calendarColors: false)) }
