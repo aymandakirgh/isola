@@ -104,10 +104,11 @@ enum SystemModule {
         }
         Debug.on("system.focus") { a in
             let name = a["name"] ?? "Work"
-            // A known name keeps its mode id, so `name=Sleep` also plays the Sleep sound.
+            // A known name keeps its mode id, so `name=Sleep` also plays the Sleep sound and follows
+            // its Allowed Notifications switch; `id=` names a custom mode (it joins that list).
             let known = FocusMonitor.known.first { $0.value.name == name }
             let mode = FocusMonitor.Mode(
-                id: known?.key ?? "debug", name: name, symbol: a["symbol"] ?? known?.value.symbol ?? "moon.fill",
+                id: a["id"] ?? known?.key ?? "debug", name: name, symbol: a["symbol"] ?? known?.value.symbol ?? "moon.fill",
                 tint: known?.value.tint ?? .systemIndigo
             )
             let monitor = FocusMonitor.shared
@@ -118,6 +119,24 @@ enum SystemModule {
             } else {
                 monitor.apply(mode, announce: true)
             }
+        }
+        // e.g. `isolactl system.pref hidePercentage=1 deviceThreshold=0.3 deviceImage=symbol mute=Work`
+        // (`mute`/`allow` take a mode's English name or its id); `isolactl system.state` reads them back.
+        Debug.on("system.pref") { a in
+            let p = SystemPreferences.shared
+            if let v = a["hidePercentage"] { p.hideBatteryPercentage = v == "1" }
+            if let v = a["deviceThreshold"].flatMap(Double.init) { p.deviceLowBatteryThreshold = v }
+            if let v = a["deviceImage"].flatMap(DeviceImage.init(rawValue:)) { p.deviceImage = v }
+            func id(_ name: String) -> String { FocusMonitor.known.first { $0.value.name == name }?.key ?? name }
+            if let v = a["mute"].map(id), !p.focusMutedModes.contains(v) { p.focusMutedModes.append(v) }
+            if let v = a["allow"].map(id) { p.focusMutedModes.removeAll { $0 == v } }
+        }
+        Debug.on("system.state") { _ in
+            let p = SystemPreferences.shared
+            Debug.reply(
+                "hidePercentage=\(p.hideBatteryPercentage) deviceThreshold=\(p.deviceLowBatteryThreshold) deviceImage=\(p.deviceImage.rawValue) "
+                    + "focus=\(FocusMonitor.shared.current?.id ?? "off") muted=\(p.focusMutedModes) seen=\(p.focusSeenModes.keys.sorted())"
+            )
         }
         Debug.on("system.lock") { _ in LockMonitor.locked() }
         Debug.on("system.unlock") { _ in LockMonitor.unlocked() }
@@ -134,13 +153,20 @@ enum SystemModule {
         let headphones = ConnectedDevice(id: "c", name: "AirPods Max", symbol: "airpodsmax", battery: 0.09, caseBattery: nil)
         let work = FocusMonitor.known["com.apple.focus.work"]!
         let sleep = FocusMonitor.known["com.apple.sleep.sleep-mode"]!
+        var calm = FocusMonitor.known["com.apple.focus.reduce-interruptions"]!
+        calm.id = "com.apple.focus.reduce-interruptions"
         for (suffix, g) in [("pill", NotchGeometry.pillPreview), ("notch", NotchGeometry.notchPreview)] {
-            Gallery.island("system-charger-on-\(suffix)", item: PowerItems.charger(connected: true, level: 0.84), geometry: g)
-            Gallery.island("system-charger-off-\(suffix)", item: PowerItems.charger(connected: false, level: 0.62), geometry: g)
+            Gallery.island("system-charger-on-\(suffix)", item: PowerItems.charger(connected: true, level: 0.84, hidePercentage: false), geometry: g)
+            Gallery.island("system-charger-off-\(suffix)", item: PowerItems.charger(connected: false, level: 0.62, hidePercentage: false), geometry: g)
             Gallery.island("system-charging-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72), geometry: g)
-            Gallery.island("system-charging-peek-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72), peeking: true, geometry: g)
-            Gallery.island("system-charging-details-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72, watts: 96, details: true), peeking: true, geometry: g)
-            Gallery.island("system-low-battery-\(suffix)", item: PowerItems.lowBattery(level: 0.18), geometry: g)
+            Gallery.island("system-charging-peek-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72, hidePercentage: false), peeking: true, geometry: g)
+            Gallery.island("system-charging-details-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, minutesToFull: 72, watts: 96, details: true, hidePercentage: false), peeking: true, geometry: g)
+            Gallery.island("system-low-battery-\(suffix)", item: PowerItems.lowBattery(level: 0.18, hidePercentage: false), geometry: g)
+            // Hide percentage: rings in the wing, no number in the charging peek.
+            Gallery.island("system-charger-on-hidden-\(suffix)", item: PowerItems.charger(connected: true, level: 0.84, hidePercentage: true), geometry: g)
+            Gallery.island("system-charger-off-hidden-\(suffix)", item: PowerItems.charger(connected: false, level: 0.62, hidePercentage: true), geometry: g)
+            Gallery.island("system-low-battery-hidden-\(suffix)", item: PowerItems.lowBattery(level: 0.18, hidePercentage: true), geometry: g)
+            Gallery.island("system-charging-details-hidden-\(suffix)", item: PowerItems.chargingActivity(level: 0.46, watts: 96, details: true, hidePercentage: true), peeking: true, geometry: g)
             Gallery.island("system-low-power-on-\(suffix)", item: PowerItems.lowPower(on: true), geometry: g)
             Gallery.island("system-low-power-off-\(suffix)", item: PowerItems.lowPower(on: false), geometry: g)
             Gallery.island("system-bt-airpods-\(suffix)", item: BluetoothItems.connected(airpods, earbuds: true), geometry: g)
@@ -155,6 +181,7 @@ enum SystemModule {
                 Gallery.island("system-bt-airpodsmax-\(label)-\(suffix)", item: BluetoothItems.connected(airpodsMax, earbuds: false), geometry: g)
             }
             Gallery.island("system-focus-on-\(suffix)", item: FocusItems.changed(work, on: true), geometry: g)
+            Gallery.island("system-focus-reduce-interruptions-\(suffix)", item: FocusItems.changed(calm, on: true), geometry: g)
             Gallery.island("system-focus-off-\(suffix)", item: FocusItems.changed(sleep, on: false), geometry: g)
             Gallery.island("system-focus-activity-\(suffix)", item: FocusItems.activity(work), geometry: g)
             Gallery.island("system-focus-activity-peek-\(suffix)", item: FocusItems.activity(work), peeking: true, geometry: g)
@@ -170,8 +197,8 @@ enum SystemModule {
             .background(Color.black)
         }
         // Forms are AppKit-backed, which ImageRenderer can't draw: snapshot a real hosting view.
-        let settings = snapshot(SystemSettingsView(), size: CGSize(width: 520, height: 1000))
-        Gallery.add("system-settings", size: CGSize(width: 520, height: 1000)) { Image(nsImage: settings) }
+        let settings = snapshot(SystemSettingsView(), size: CGSize(width: 520, height: 1720))
+        Gallery.add("system-settings", size: CGSize(width: 520, height: 1720)) { Image(nsImage: settings) }
     }
 
     /// Parser/classifier checks; runs with `Isola --gallery` (asserts trip in debug builds).
@@ -201,6 +228,25 @@ enum SystemModule {
         precondition(FocusL10n.text("Deep Work", language: "it") == "Deep Work", "custom names stay as they are")
         precondition(FocusL10n.language(for: ["it-IT", "en-US"]) == "it" && FocusL10n.language(for: ["nl-NL", "de-DE"]) == "de"
             && FocusL10n.language(for: ["ja-JP"]) == "en", "Focus language pick")
+        precondition(FocusL10n.text("Reduce Interruptions", language: "it") == "Meno interruzioni" && FocusMonitor.known["com.apple.focus.reduce-interruptions"] != nil,
+            "Reduce Interruptions is a known mode")
+        // Allowed Notifications: a switched-off mode stays quiet; the generic one follows "Focus changes" only.
+        precondition(FocusMonitor.announces("com.apple.focus.work", enabled: true, muted: []) && !FocusMonitor.announces("com.apple.focus.work", enabled: true, muted: ["com.apple.focus.work"])
+            && FocusMonitor.announces(FocusMonitor.genericID, enabled: true, muted: ["com.apple.focus.work"]) && !FocusMonitor.announces(FocusMonitor.genericID, enabled: false, muted: []),
+            "Focus allowed list")
+        let listed = FocusMonitor.listed(seen: ["custom-1": ["Deep Work", "laptopcomputer"], "com.apple.focus.work": ["Work", "briefcase.fill"]])
+        precondition(listed.count == FocusMonitor.known.count + 1 && listed.first?.name == "Do Not Disturb" && listed.last?.id == "custom-1", "built-in modes by name, then custom ones")
+        // Low battery: the chosen level, then 10%; a level already under both warns once.
+        precondition(PowerMonitor.warning(level: 0.18, threshold: 0.2, warned: 1) == 0.2 && PowerMonitor.warning(level: 0.17, threshold: 0.2, warned: 0.2) == nil
+            && PowerMonitor.warning(level: 0.09, threshold: 0.2, warned: 0.2) == 0.1 && PowerMonitor.warning(level: 0.05, threshold: 0.3, warned: 1) == 0.1
+            && PowerMonitor.warning(level: 0.25, threshold: 0.3, warned: 1) == 0.3 && PowerMonitor.warning(level: 0.25, threshold: 0.2, warned: 1) == nil, "battery warnings")
+        // Hide percentage drops the number from the charging peek, never the rest.
+        precondition(PowerItems.chargingCaption(level: 0.46, minutesToFull: nil, watts: 96, details: true, hidePercentage: false) == "46% · 96 W adapter"
+            && PowerItems.chargingCaption(level: 0.46, minutesToFull: nil, watts: 96, details: true, hidePercentage: true) == "96 W adapter"
+            && PowerItems.chargingCaption(level: 1, minutesToFull: nil, watts: nil, details: false, hidePercentage: false) == "Charged · 100%"
+            && PowerItems.chargingCaption(level: 1, minutesToFull: 3, watts: nil, details: false, hidePercentage: true) == "Charged"
+            && PowerItems.chargingCaption(level: 0.46, minutesToFull: 72, watts: nil, details: false, hidePercentage: false) == "Full in 1h 12m"
+            && PowerItems.chargingCaption(level: 0.46, minutesToFull: nil, watts: nil, details: false, hidePercentage: true) == "Charging", "charging peek")
         assert(PowerItems.symbol(for: 0.05) == "battery.0percent" && PowerItems.symbol(for: 0.5) == "battery.50percent", "battery symbol")
         assert(PowerItems.minutes(72) == "1h 12m" && PowerItems.minutes(9) == "9 min", "minutes")
         let r = PowerMonitor.read()

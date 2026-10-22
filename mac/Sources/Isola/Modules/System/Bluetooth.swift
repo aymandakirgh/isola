@@ -90,21 +90,19 @@ final class BluetoothMonitor: NSObject {
         if SystemPreferences.shared.bluetoothNotification { Island.shared.post(BluetoothItems.disconnected(device)) }
     }
 
+    /// Devices warn at their own level (Connectivity › Warn at), then again at 10%.
     private func checkBattery(_ device: ConnectedDevice, announce: Bool) {
         let prefs = SystemPreferences.shared
         guard let level = device.battery, prefs.deviceLowBattery else { return }
-        if level > prefs.lowBatteryThreshold { warned[device.id] = 1; return }
-        let last = warned[device.id] ?? 1
-        for t in [prefs.lowBatteryThreshold, 0.1] where level <= t && t < last {
-            warned[device.id] = t
-            guard announce else { break }
-            // Connection notification first, the warning right after it.
-            let delay = Island.shared.transient?.id == "system.bluetooth" ? Preferences.shared.notificationDuration : 0
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                Island.shared.post(BluetoothItems.lowBattery(device), duration: 5)
-                if prefs.deviceLowBatterySound { Sounds.lowBattery() }
-            }
-            break
+        if level > prefs.deviceLowBatteryThreshold { warned[device.id] = 1; return }
+        guard let t = PowerMonitor.warning(level: level, threshold: prefs.deviceLowBatteryThreshold, warned: warned[device.id] ?? 1) else { return }
+        warned[device.id] = t
+        guard announce else { return }
+        // Connection notification first, the warning right after it.
+        let delay = Island.shared.transient?.id == "system.bluetooth" ? Preferences.shared.notificationDuration : 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            Island.shared.post(BluetoothItems.lowBattery(device), duration: 5)
+            if prefs.deviceLowBatterySound { Sounds.lowBattery() }
         }
     }
 
@@ -450,9 +448,10 @@ struct ProximityPairing {
 
 @MainActor
 enum BluetoothItems {
+    /// In-ear devices loop the earbuds clip, unless Connectivity › Device image asks for symbols.
     static func connected(_ device: ConnectedDevice, earbuds: Bool) -> IslandItem {
         IslandItem(id: "system.bluetooth", kind: .notification) {
-            if earbuds, EarbudsVideo.url != nil, !SystemModule.renderingGallery {
+            if earbuds, SystemPreferences.shared.deviceImage == .model, EarbudsVideo.url != nil, !SystemModule.renderingGallery {
                 EarbudsVideo().frame(width: 32, height: 32).padding(.leading, 6).padding(.bottom, 2)
             } else {
                 DeviceGlyph(device: device).padding(.leading, 11)

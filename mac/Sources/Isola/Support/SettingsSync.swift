@@ -239,25 +239,37 @@ final class SettingsSync {
 
             "system.chargingNotification": bind(system, \.chargingNotification),
             "system.chargingActivity": bind(system, \.chargingActivity),
+            "system.hideBatteryPercentage": bind(system, \.hideBatteryPercentage),
             "system.lowBatteryNotification": bind(system, \.lowBatteryNotification),
             "system.lowBatteryThreshold": bind(system, \.lowBatteryThreshold),
             "system.lowBatterySound": bind(system, \.lowBatterySound),
             "system.lowPowerNotification": bind(system, \.lowPowerNotification),
             "system.bluetoothNotification": bind(system, \.bluetoothNotification),
             "system.bluetoothAllDevices": bind(system, \.bluetoothAllDevices),
+            "system.deviceImage": bindRaw(system, \.deviceImage),
             "system.deviceLowBattery": bind(system, \.deviceLowBattery),
+            "system.deviceLowBatteryThreshold": bind(system, \.deviceLowBatteryThreshold),
             "system.deviceLowBatterySound": bind(system, \.deviceLowBatterySound),
             "system.focusNotification": bind(system, \.focusNotification),
+            "system.focusMutedModes": bind(system, \.focusMutedModes),
             "system.focusActivity": bind(system, \.focusActivity),
             "system.sleepFocusSound": bind(system, \.sleepFocusSound),
             "system.lockActivity": bind(system, \.lockActivity),
 
             "hud.replaceSystemHUD": bind(hud, \.replaceSystemHUD),
-            "hud.style": bindRaw(hud, \.style),
-            "hud.showLabels": bind(hud, \.showLabels),
-            "hud.glow": bind(hud, \.glow),
+            "hud.volume.style": bindRaw(hud, \.volume.style),
+            "hud.volume.showPercentage": bind(hud, \.volume.showPercentage),
+            "hud.volume.labels": bind(hud, \.volume.labels),
+            "hud.volume.duration": bind(hud, \.volume.duration),
+            "hud.volume.speed": bindRaw(hud, \.volume.speed),
+            "hud.brightness.style": bindRaw(hud, \.brightness.style),
+            "hud.brightness.showPercentage": bind(hud, \.brightness.showPercentage),
+            "hud.brightness.labels": bind(hud, \.brightness.labels),
+            "hud.brightness.duration": bind(hud, \.brightness.duration),
+            "hud.brightness.speed": bindRaw(hud, \.brightness.speed),
+            "hud.linked": bind(hud, \.linked),
             "hud.displaySymbol": bind(hud, \.displaySymbol),
-            "hud.duration": bind(hud, \.duration),
+            "hud.outputStyle": bindRaw(hud, \.outputStyle),
             "hud.showExternalChanges": bind(hud, \.showExternalChanges),
             "hud.betterDisplay": bind(hud, \.betterDisplay),
             "hud.feedbackSound": bind(hud, \.feedbackSound),
@@ -275,6 +287,16 @@ final class SettingsSync {
             "calendar.lunar": bind(calendar, \.lunar),
             "calendar.openWith": bind(calendar, \.openWith),
             "calendar.idleActivity": bind(calendar, \.idleActivity),
+            "calendar.hideDuringEvents": bind(calendar, \.hideDuringEvents),
+            "calendar.peekTiming": bindRaw(calendar, \.peekTiming),
+            "calendar.peekDuration": bind(calendar, \.peekDuration),
+            "calendar.leaveDuration": bind(calendar, \.leaveDuration),
+            "calendar.monthView": bind(calendar, \.monthView),
+            "calendar.eventIndicators": bind(calendar, \.eventIndicators),
+            "calendar.coloredIndicators": bind(calendar, \.coloredIndicators),
+            "calendar.hourlyChime": bind(calendar, \.hourlyChime),
+            "calendar.eventSound": bind(calendar, \.eventSound),
+            "calendar.notificationSound": bind(calendar, \.notificationSound),
             "weather.enabled": bind(calendar, \.weather),
             "weather.city": bind(calendar, \.weatherCity),
             "weather.lat": bind(calendar, \.weatherLatitude),
@@ -407,7 +429,7 @@ final class SettingsSync {
         let t = Date(timeIntervalSinceReferenceDate: 800_000_000)
         // A turns sync on first; its license, onboarding, dismissed events and display stay home.
         var macA: [String: Any] = [
-            "duo": false, "hud.style": "bar", "media.spectrogram": true,
+            "duo": false, "hud.volume.style": "white", "media.spectrogram": true,
             "license.key": "ISOLA-AAAA", "onboarded": true, "calendar.dismissed": ["event-1"], "preferredDisplay": "LG UltraFine",
         ]
         var ledgerA: [String: Entry] = [:]
@@ -415,17 +437,17 @@ final class SettingsSync {
         var r = merge(ledgerA, [:])
         precondition(r.outgoing && r.incoming.isEmpty, "sync: the first Mac writes the file")
         var file = decode(try! encode(r.ledger))
-        precondition(Set(file.keys) == ["duo", "hud.style", "media.spectrogram"], "sync: excluded keys never leave")
+        precondition(Set(file.keys) == ["duo", "hud.volume.style", "media.spectrogram"], "sync: excluded keys never leave")
         ledgerA = r.ledger
 
         // A turns duo on; meanwhile B wrote an older duo, a newer HUD style and its own license key.
         macA["duo"] = true
         precondition(stamp(&ledgerA, values: macA, date: t.addingTimeInterval(20), mac: "A"), "sync: a local change is stamped")
         file["duo"] = Entry(value: false, modified: t, mac: "B")
-        file["hud.style"] = Entry(value: "percentage", modified: t.addingTimeInterval(10), mac: "B")
+        file["hud.volume.style"] = Entry(value: "accent", modified: t.addingTimeInterval(10), mac: "B")
         file["license.key"] = Entry(value: "ISOLA-BBBB", modified: t.addingTimeInterval(30), mac: "B")
         r = merge(ledgerA, file)
-        precondition(Array(r.incoming.keys) == ["hud.style"] && r.ledger["hud.style"]?.mac == "B", "sync: a newer remote key wins")
+        precondition(Array(r.incoming.keys) == ["hud.volume.style"] && r.ledger["hud.volume.style"]?.mac == "B", "sync: a newer remote key wins")
         precondition(r.ledger["duo"]?.mac == "A" && r.outgoing, "sync: an older remote key loses, and A writes its newer one back")
         precondition(r.ledger["license.key"] == nil, "sync: excluded keys never arrive")
 
@@ -438,7 +460,7 @@ final class SettingsSync {
         precondition(!r.outgoing && r.incoming.isEmpty, "sync: applying a merge produces no new write")
 
         // B reads A's file: it takes A's newer duo and has nothing to write back.
-        let ledgerB = ["duo": Entry(value: false, modified: t, mac: "B"), "hud.style": file["hud.style"]!]
+        let ledgerB = ["duo": Entry(value: false, modified: t, mac: "B"), "hud.volume.style": file["hud.volume.style"]!]
         r = merge(ledgerB, file)
         precondition(r.incoming["duo"].map { same($0.value, true) } == true && !r.outgoing, "sync: the other Mac converges without writing")
 

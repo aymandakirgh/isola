@@ -4,13 +4,43 @@ import CoreAudio
 import Observation
 import SwiftUI
 
-enum HUDStyle: String, CaseIterable, Identifiable {
-    case bar, percentage, decibels
+/// How a HUD's level shows: white, the system accent colour, a gradient of the HUD's own, or a
+/// style only one HUD has (the Display HUD's glow, the Sound HUD's decibels).
+enum HUDProgressStyle: String, CaseIterable, Identifiable {
+    case white, accent, stylized, glow, decibel
     var id: String { rawValue }
-    var title: String { self == .bar ? "Bar" : self == .percentage ? "Percentage" : "Decibels" }
+    var title: String {
+        switch self {
+        case .white: "White"
+        case .accent: "Accent colour"
+        case .stylized: "Gradient"
+        case .glow: "Glow"
+        case .decibel: "Decibels"
+        }
+    }
+
+    func fits(_ kind: HUDKind) -> Bool {
+        switch self {
+        case .glow: kind == .brightness
+        case .decibel: kind == .volume
+        default: true
+        }
+    }
 }
 
-enum HUDKind: String { case volume, brightness }
+enum HUDKind: String, CaseIterable, Identifiable {
+    case volume, brightness
+    var id: String { rawValue }
+    /// Its page in HUDs settings.
+    var title: String { self == .volume ? "Sound" : "Display" }
+}
+
+/// What the Sound HUD pictures: the output device (its glyph and name), or always the speaker.
+enum HUDOutputStyle: String, CaseIterable, Identifiable {
+    case device, symbol
+    var id: String { rawValue }
+    var title: String { self == .device ? "Show device" : "Show speaker symbol" }
+}
 
 private let store = UserDefaults.standard
 private func load<T>(_ key: String, _ fallback: T) -> T { store.object(forKey: key) as? T ?? fallback }
@@ -23,14 +53,15 @@ final class HUDPreferences {
     var replaceSystemHUD: Bool = load("hud.replaceSystemHUD", false) {
         didSet { store.set(replaceSystemHUD, forKey: "hud.replaceSystemHUD"); HUDModule.updateTap() }
     }
-    var style: HUDStyle = HUDStyle(rawValue: store.string(forKey: "hud.style") ?? "") ?? .bar {
-        didSet { store.set(style.rawValue, forKey: "hud.style") }
-    }
-    /// "Volume" / "Brightness" (or the output device) with a full-width bar under the notch.
-    var showLabels: Bool = load("hud.showLabels", true) { didSet { store.set(showLabels, forKey: "hud.showLabels") } }
-    var glow: Bool = load("hud.glow", true) { didSet { store.set(glow, forKey: "hud.glow") } }
+    /// Each HUD's own look (HUDs › Sound and Display); read it through `look(_:)`.
+    var volume = HUDLook.saved(.volume) { didSet { volume.save(.volume) } }
+    var brightness = HUDLook.saved(.brightness) { didSet { brightness.save(.brightness) } }
+    /// Link settings between HUDs: an edit on either page lands on both.
+    var linked: Bool = load("hud.linked", true) { didSet { store.set(linked, forKey: "hud.linked") } }
     var displaySymbol: Bool = load("hud.displaySymbol", false) { didSet { store.set(displaySymbol, forKey: "hud.displaySymbol") } }
-    var duration: Double = load("hud.duration", 1.5) { didSet { store.set(duration, forKey: "hud.duration") } }
+    var outputStyle: HUDOutputStyle = HUDOutputStyle(rawValue: store.string(forKey: "hud.outputStyle") ?? "") ?? .device {
+        didSet { store.set(outputStyle.rawValue, forKey: "hud.outputStyle") }
+    }
     /// Sync: also show the HUD for volume changed elsewhere (other apps, Control Center,
     /// AirPods), not only for key presses. Telling them apart needs the key tap.
     var showExternalChanges: Bool = load("hud.showExternalChanges", true) {
@@ -42,8 +73,46 @@ final class HUDPreferences {
     var feedbackSound: Bool = load("hud.feedbackSound", (store.object(forKey: "com.apple.sound.beep.feedback") as? Int ?? 0) == 1) {
         didSet { store.set(feedbackSound, forKey: "hud.feedbackSound") }
     }
+    /// The HUD the settings page shows (not saved).
+    var page: HUDKind = .volume
 
-    var look: HUDLook { HUDLook(style: style, labels: showLabels, glow: glow, displaySymbol: displaySymbol) }
+    /// What one HUD looks like now.
+    func look(_ kind: HUDKind) -> HUDLook {
+        var look = kind == .volume ? volume : brightness
+        if !look.style.fits(kind) { look.style = .white }  // a synced value meant for the other HUD
+        look.displaySymbol = displaySymbol
+        look.output = outputStyle
+        return look
+    }
+
+    /// A settings edit to one HUD; with Link on the other takes it too.
+    func edit<V>(_ kind: HUDKind, _ path: WritableKeyPath<HUDLook, V>, _ value: V) {
+        let r = Self.edit((volume, brightness), kind, path, value, linked: linked)
+        if r.volume != volume { volume = r.volume }
+        if r.brightness != brightness { brightness = r.brightness }
+    }
+
+    /// An edit on `kind`'s page as each HUD takes it: with Link on both do, except that a HUD never
+    /// takes a style it doesn't have (glow, decibels).
+    nonisolated static func edit<V>(_ looks: (volume: HUDLook, brightness: HUDLook), _ kind: HUDKind, _ path: WritableKeyPath<HUDLook, V>, _ value: V, linked: Bool) -> (volume: HUDLook, brightness: HUDLook) {
+        var r = looks
+        for k in linked ? HUDKind.allCases : [kind] {
+            var look = k == .volume ? r.volume : r.brightness
+            look[keyPath: path] = value
+            guard look.style.fits(k) else { continue }
+            if k == .volume { r.volume = look } else { r.brightness = look }
+        }
+        return r
+    }
+
+    /// Turning Link on starts both HUDs from `kind`'s look (the other keeps a style it can't share).
+    func link(from kind: HUDKind) {
+        linked = true
+        let other: HUDKind = kind == .volume ? .brightness : .volume
+        var look = kind == .volume ? volume : brightness
+        if !look.style.fits(other) { look.style = (other == .volume ? volume : brightness).style }
+        if other == .volume { volume = look } else { brightness = look }
+    }
 }
 
 /// What a HUD shows; a plain value so gallery snapshots don't depend on live state.
@@ -56,11 +125,56 @@ struct HUDSnapshot {
     var displayName = "Built-in Display"
 }
 
-struct HUDLook {
-    var style: HUDStyle = .bar
+/// One HUD's appearance and motion; a plain value so gallery snapshots don't depend on live state.
+struct HUDLook: Equatable {
+    var style: HUDProgressStyle = .white
+    var showPercentage = false
     var labels = true
-    var glow = true
+    var duration: Double = 1.5
+    var speed: AnimationSpeed = .smooth
+    /// Not saved per HUD: `HUDPreferences.look(_:)` fills them in.
     var displaySymbol = false
+    var output: HUDOutputStyle = .device
+
+    /// The HUD's own spring, scaled by its speed (the island's Overshoot still applies).
+    @MainActor func spring(_ stiffness: Double, _ damping: Double) -> Animation {
+        let f = speed.factor
+        let d = Preferences.shared.overshoot ? damping : max(damping, 2 * stiffness.squareRoot())
+        return .interpolatingSpring(mass: 1, stiffness: stiffness * f, damping: d * f.squareRoot())
+    }
+
+    /// The HUD springing in and out: the island's expand spring, at the HUD's speed.
+    @MainActor var motion: Animation { spring(150, 20) }
+
+    /// The bar filling: LevelBar's spring, at the HUD's speed.
+    var fillSpring: Animation {
+        .interpolatingSpring(mass: 1, stiffness: 300 * speed.factor, damping: 30 * speed.factor.squareRoot())
+    }
+
+    /// A HUD's saved look. Before each HUD had its own, both shared "hud.style" (bar, percentage
+    /// or decibels), "hud.showLabels" and "hud.duration", and the Display HUD had "hud.glow".
+    static func saved(_ kind: HUDKind) -> HUDLook {
+        let key = "hud.\(kind.rawValue)."
+        let legacy = store.string(forKey: "hud.style")
+        let style = HUDProgressStyle(rawValue: store.string(forKey: key + "style") ?? "")
+            ?? (kind == .volume ? (legacy == "decibels" ? .decibel : .white) : (load("hud.glow", false) ? .glow : .white))
+        return HUDLook(
+            style: style.fits(kind) ? style : .white,
+            showPercentage: load(key + "showPercentage", legacy == "percentage"),
+            labels: load(key + "labels", load("hud.showLabels", true)),
+            duration: load(key + "duration", load("hud.duration", 1.5)),
+            speed: AnimationSpeed(rawValue: store.string(forKey: key + "speed") ?? "") ?? .smooth
+        )
+    }
+
+    func save(_ kind: HUDKind) {
+        let key = "hud.\(kind.rawValue)."
+        store.set(style.rawValue, forKey: key + "style")
+        store.set(showPercentage, forKey: key + "showPercentage")
+        store.set(labels, forKey: key + "labels")
+        store.set(duration, forKey: key + "duration")
+        store.set(speed.rawValue, forKey: key + "speed")
+    }
 }
 
 /// An output device as the HUD presents it.
@@ -180,26 +294,22 @@ enum HUDModule {
         if HUDPreferences.shared.replaceSystemHUD && trusted { MediaKeyTap.shared.install() } else { MediaKeyTap.shared.remove() }
     }
 
-    static func requestAccessibility() {
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
-        updateTap()
-    }
-
     // MARK: Showing
 
+    /// Each HUD reads its own look: labels, how long it stays and how fast it springs.
     static func item(_ kind: HUDKind) -> IslandItem {
         let item = IslandItem(id: "hud.\(kind.rawValue)", kind: .hud) {
             LiveHUD(part: .leading)
         } trailing: {
             LiveHUD(part: .trailing)
         }
-        return HUDPreferences.shared.showLabels ? item.peek(always: true) { LiveHUD(part: .label) } : item
+        return HUDPreferences.shared.look(kind).labels ? item.peek(always: true) { LiveHUD(part: .label) } : item
     }
 
     static func show(_ snapshot: HUDSnapshot) {
         HUDModel.shared.snapshot = snapshot
-        Island.shared.post(item(snapshot.kind), duration: HUDPreferences.shared.duration)
+        let look = HUDPreferences.shared.look(snapshot.kind)
+        Island.shared.post(item(snapshot.kind), duration: look.duration, animation: look.motion)
     }
 
     /// Passive path: any volume/mute change on the output device.
@@ -261,13 +371,14 @@ enum HUDModule {
         }
     }
 
-    /// Pushing past 0% or 100% stretches the bar toward the push and lets it spring back,
-    /// only with the island's Overshoot on.
+    /// Pushing past 0% or 100% stretches the bar toward the push and lets it spring back (at the
+    /// HUD's speed), only with the island's Overshoot on.
     private static func rubberBand() {
         guard Preferences.shared.overshoot else { return }
+        let spring = HUDPreferences.shared.look(HUDModel.shared.snapshot.kind).spring(300, 9)
         withAnimation(.easeOut(duration: 0.08)) { HUDModel.shared.stretch = 1 }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            withAnimation(Springs.spring(300, 9)) { HUDModel.shared.stretch = 0 }
+            withAnimation(spring) { HUDModel.shared.stretch = 0 }
         }
     }
 
@@ -309,10 +420,49 @@ enum HUDModule {
             guard let data = try? JSONSerialization.data(withJSONObject: osd), let json = String(data: data, encoding: .utf8) else { return }
             DistributedNotificationCenter.default().postNotificationName(BetterDisplayOSD.notification, object: json, userInfo: nil, deliverImmediately: true)
         }
+        // A settings edit as the HUDs page makes it (Link applies): `hud.pref kind=brightness style=glow
+        // percent=1 labels=0 speed=fast duration=3`; `linked=0|1`, `output=symbol|device`. `hud.state` reads both looks.
+        Debug.on("hud.pref") { args in
+            let hud = HUDPreferences.shared
+            let kind = args["kind"].flatMap(HUDKind.init(rawValue:)) ?? .volume
+            if let v = args["linked"] { if v == "1" { hud.link(from: kind) } else { hud.linked = false } }
+            if let v = args["style"].flatMap(HUDProgressStyle.init(rawValue:)) { hud.edit(kind, \.style, v) }
+            if let v = args["percent"] { hud.edit(kind, \.showPercentage, v == "1") }
+            if let v = args["labels"] { hud.edit(kind, \.labels, v == "1") }
+            if let v = args["speed"].flatMap(AnimationSpeed.init(rawValue:)) { hud.edit(kind, \.speed, v) }
+            if let v = args["duration"].flatMap(Double.init) { hud.edit(kind, \.duration, v) }
+            if let v = args["output"].flatMap(HUDOutputStyle.init(rawValue:)) { hud.outputStyle = v }
+        }
+        Debug.on("hud.state") { _ in
+            let hud = HUDPreferences.shared
+            func describe(_ l: HUDLook) -> String { "\(l.style.rawValue) percent=\(l.showPercentage) labels=\(l.labels) speed=\(l.speed.rawValue) duration=\(l.duration)" }
+            Debug.reply("linked=\(hud.linked) output=\(hud.outputStyle.rawValue) | sound: \(describe(hud.look(.volume))) | display: \(describe(hud.look(.brightness)))")
+        }
     }
 
     /// Pure-logic checks; run with every gallery render (debug build asserts).
     static func selfCheck() {
+        // Link: an edit lands on both HUDs, except a style only one of them has; unlinked, on one.
+        let pair = (volume: HUDLook(), brightness: HUDLook(style: .glow))
+        var r = HUDPreferences.edit(pair, .volume, \.style, .accent, linked: true)
+        precondition(r.volume.style == .accent && r.brightness.style == .accent, "linked edit reaches both HUDs")
+        r = HUDPreferences.edit(pair, .volume, \.style, .decibel, linked: true)
+        precondition(r.volume.style == .decibel && r.brightness.style == .glow, "decibels stay with the Sound HUD")
+        r = HUDPreferences.edit(pair, .brightness, \.labels, false, linked: true)
+        precondition(!r.volume.labels && !r.brightness.labels && r.brightness.style == .glow, "other settings follow, styles stay")
+        r = HUDPreferences.edit(pair, .brightness, \.speed, .instant, linked: false)
+        precondition(r.volume.speed == .smooth && r.brightness.speed == .instant, "unlinked: one HUD")
+        // The narrow wing: decibels or nothing with labels (the row below has the bar and the number);
+        // without, the number replaces the bar, and "Mute" shows wherever a number would.
+        typealias W = HUDPart.Wing
+        precondition(HUDPart.wing(labels: true, showPercentage: true, decibels: false, silent: false) == W.empty
+            && HUDPart.wing(labels: true, showPercentage: false, decibels: true, silent: false) == W.decibels
+            && HUDPart.wing(labels: false, showPercentage: false, decibels: false, silent: false) == W.bar
+            && HUDPart.wing(labels: false, showPercentage: true, decibels: false, silent: false) == W.percent
+            && HUDPart.wing(labels: false, showPercentage: true, decibels: true, silent: false) == W.decibels
+            && HUDPart.wing(labels: false, showPercentage: true, decibels: false, silent: true) == W.mute
+            && HUDPart.wing(labels: false, showPercentage: false, decibels: false, silent: true) == W.bar, "HUD wing")
+        precondition(!HUDProgressStyle.glow.fits(.volume) && !HUDProgressStyle.decibel.fits(.brightness) && HUDProgressStyle.stylized.fits(.volume), "styles per HUD")
         assert(stepped(0.5, up: true, fine: false) == 0.5625)
         assert(stepped(0.51, up: false, fine: false) == 0.4375)  // snaps to the grid first
         assert(stepped(1, up: true, fine: false) == 1 && stepped(0, up: false, fine: false) == 0)
@@ -350,6 +500,7 @@ enum HUDModule {
         func volume(_ level: Double, muted: Bool = false, device: String = "speakers") -> HUDSnapshot {
             HUDSnapshot(kind: .volume, level: level, muted: muted, decibels: HUDOutput.approximateDecibels(level), output: .preset(device))
         }
+        func brightness(_ level: Double) -> HUDSnapshot { HUDSnapshot(kind: .brightness, level: level) }
         let compact = HUDLook(labels: false)
         add("volume-low", volume(0.19))
         add("volume-mid", volume(0.5))
@@ -361,29 +512,46 @@ enum HUDModule {
         blue.output.deviceTint = BluetoothMonitor.maxColors[0x03]?.tint
         add("volume-airpodsmax-blue", blue)
         add("volume-notch", volume(0.5), geometry: .notchPreview)
-        add("style-bar-compact", volume(0.5), compact)
-        add("style-bar-compact-notch", volume(0.5), compact, geometry: .notchPreview)
-        add("style-percentage-compact", volume(0.75), HUDLook(style: .percentage, labels: false))
-        add("style-decibels-compact", volume(0.5), HUDLook(style: .decibels, labels: false))
-        add("style-decibels-labels", volume(0.5), HUDLook(style: .decibels))
-        add("style-percentage-muted", volume(0.5, muted: true), HUDLook(style: .percentage, labels: false))
-        add("brightness-glow", HUDSnapshot(kind: .brightness, level: 0.8))
-        add("brightness-low", HUDSnapshot(kind: .brightness, level: 0.2))
-        add("brightness-display-symbol", HUDSnapshot(kind: .brightness, level: 0.55), HUDLook(displaySymbol: true))
-        add("brightness-compact-notch", HUDSnapshot(kind: .brightness, level: 0.7), compact, geometry: .notchPreview)
+        // Show percentage: next to the bar under the notch, or instead of it in the wing.
+        add("volume-percent", volume(0.62), HUDLook(showPercentage: true))
+        add("volume-percent-notch", volume(0.62, device: "airpodspro"), HUDLook(showPercentage: true), geometry: .notchPreview)
+        add("volume-percent-muted", volume(0.5, muted: true), HUDLook(showPercentage: true))
+        add("style-white-compact", volume(0.5), compact)
+        add("style-white-compact-notch", volume(0.5), compact, geometry: .notchPreview)
+        add("style-percent-compact", volume(0.75), HUDLook(showPercentage: true, labels: false))
+        add("style-percent-muted", volume(0.5, muted: true), HUDLook(showPercentage: true, labels: false))
+        add("style-decibel-compact", volume(0.5), HUDLook(style: .decibel, labels: false))
+        add("style-decibel-labels", volume(0.5), HUDLook(style: .decibel))
+        add("style-accent-compact", volume(0.5), HUDLook(style: .accent, labels: false))
+        add("style-accent-labels", volume(0.66), HUDLook(style: .accent, showPercentage: true))
+        add("style-stylized-compact", volume(0.7), HUDLook(style: .stylized, labels: false))
+        add("style-stylized-airpodsmax-blue", blue, HUDLook(style: .stylized))
+        // Output device › Show speaker symbol: AirPods read as the speaker and "Volume".
+        add("output-symbol", volume(0.62, device: "airpodspro"), HUDLook(output: .symbol))
+        add("brightness-white", brightness(0.8))
+        add("brightness-glow", brightness(0.8), HUDLook(style: .glow))
+        add("brightness-glow-compact", brightness(0.6), HUDLook(style: .glow, labels: false))
+        add("brightness-stylized", brightness(0.7), HUDLook(style: .stylized, showPercentage: true))
+        add("brightness-accent-compact-notch", brightness(0.45), HUDLook(style: .accent, labels: false), geometry: .notchPreview)
+        add("brightness-low", brightness(0.2), HUDLook(style: .glow))
+        add("brightness-display-symbol", brightness(0.55), HUDLook(displaySymbol: true))
+        add("brightness-compact-notch", brightness(0.7), compact, geometry: .notchPreview)
         // Peak of the rubber band when pushing past the ends.
         add("overshoot-volume-max", volume(1), stretch: 1)
         add("overshoot-volume-min-compact", volume(0), compact, stretch: 1)
-        add("overshoot-brightness-max-compact-notch", HUDSnapshot(kind: .brightness, level: 1), compact, geometry: .notchPreview, stretch: 1)
-        snapshotSettings()
+        add("overshoot-brightness-max-compact-notch", brightness(1), compact, geometry: .notchPreview, stretch: 1)
+        snapshotSettings("hud-settings", page: .volume)
+        snapshotSettings("hud-settings-display", page: .brightness)
     }
 
     /// Forms are AppKit-backed, which ImageRenderer can't draw: render the settings page
     /// through an offscreen hosting view into the gallery folder instead.
-    private static func snapshotSettings() {
+    private static func snapshotSettings(_ name: String, page: HUDKind) {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--gallery"), i + 1 < args.count else { return }
-        let size = NSRect(x: 0, y: 0, width: 520, height: 1040)
+        HUDPreferences.shared.page = page
+        defer { HUDPreferences.shared.page = .volume }
+        let size = NSRect(x: 0, y: 0, width: 520, height: 1240)
         let host = NSHostingView(rootView: HUDSettingsView().frame(width: size.width, height: size.height))
         host.frame = size
         let window = NSWindow(contentRect: size, styleMask: [.titled], backing: .buffered, defer: false)
@@ -392,6 +560,6 @@ enum HUDModule {
         guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
         rep.size = size.size
         host.cacheDisplay(in: size, to: rep)
-        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: args[i + 1]).appendingPathComponent("hud-settings.png"))
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: args[i + 1]).appendingPathComponent("\(name).png"))
     }
 }

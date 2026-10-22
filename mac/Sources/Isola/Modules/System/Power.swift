@@ -77,13 +77,17 @@ final class PowerMonitor {
         }
         if r.plugged { warned = 1; return }
         // Discharging: warn once at the chosen threshold, then again at 10%.
-        guard prefs.lowBatteryNotification, announce else { return }
-        for t in [prefs.lowBatteryThreshold, 0.1] where r.level <= t && t < warned {
-            warned = t
-            Island.shared.post(PowerItems.lowBattery(level: r.level), duration: 5)
-            if prefs.lowBatterySound { Sounds.lowBattery() }
-            break
-        }
+        guard prefs.lowBatteryNotification, announce, let t = Self.warning(level: r.level, threshold: prefs.lowBatteryThreshold, warned: warned) else { return }
+        warned = t
+        Island.shared.post(PowerItems.lowBattery(level: r.level), duration: 5)
+        if prefs.lowBatterySound { Sounds.lowBattery() }
+    }
+
+    /// The warning a falling level earns, the Mac's and devices' alike: the chosen threshold,
+    /// then a last one at 10%. Returns the level to remember as warned (the lowest one crossed,
+    /// so a level that is already under both warns once), or nil when nothing new is crossed.
+    nonisolated static func warning(level: Double, threshold: Double, warned: Double) -> Double? {
+        [threshold, 0.1].filter { level <= $0 && $0 < warned }.min()
     }
 
     /// Debug simulation: treat `r` as a fresh change even if the real state matches.
@@ -127,7 +131,8 @@ enum PowerItems {
 
     static func minutes(_ m: Int) -> String { m >= 60 ? "\(m / 60)h \(m % 60)m" : "\(m) min" }
 
-    @MainActor static func charger(connected: Bool, level: Double) -> IslandItem {
+    /// `hidePercentage` overrides the setting (gallery snapshots).
+    @MainActor static func charger(connected: Bool, level: Double, hidePercentage: Bool? = nil) -> IslandItem {
         IslandItem(id: "system.charger", kind: .notification) {
             Group {
                 if connected {
@@ -138,17 +143,25 @@ enum PowerItems {
             }
             .padding(.leading, 11)
         } trailing: {
-            WingText(percent(level), color: connected ? Palette.green : Palette.ink)
+            BatteryLevel(level: level, color: connected ? Palette.green : Palette.ink, hidePercentage: hidePercentage)
         }
     }
 
-    @MainActor static func lowBattery(level: Double) -> IslandItem {
+    @MainActor static func lowBattery(level: Double, hidePercentage: Bool? = nil) -> IslandItem {
         IslandItem(id: "system.lowBattery", kind: .notification) {
             Image(systemName: symbol(for: level)).islandSymbol(17).foregroundStyle(Palette.red).padding(.leading, 11)
         } trailing: {
-            WingText(percent(level), color: Palette.red)
+            BatteryLevel(level: level, color: Palette.red, hidePercentage: hidePercentage)
         }
         .peek(always: true) { PeekLabel(level <= 0.1 ? "Battery critically low" : "Low Battery") }
+    }
+
+    /// The charging peek: time to full, or with details the adapter; "46%" only while the percentage shows.
+    static func chargingCaption(level: Double, minutesToFull: Int?, watts: Int?, details: Bool, hidePercentage: Bool) -> String {
+        let number = hidePercentage ? nil : percent(level)
+        if details { return [number, watts.map { "\($0) W adapter" } ?? "Charging"].compactMap { $0 }.joined(separator: " · ") }
+        if level < 0.995, let m = minutesToFull { return "Full in \(minutes(m))" }
+        return [level >= 0.995 ? "Charged" : "Charging", number].compactMap { $0 }.joined(separator: " · ")
     }
 
     @MainActor static func lowPower(on: Bool) -> IslandItem {
@@ -162,13 +175,13 @@ enum PowerItems {
 
     /// Live activity; `level`/`minutesToFull`/`watts`/`details` override the live state
     /// (gallery snapshots). Option-click switches its peek between time to full and details.
-    @MainActor static func chargingActivity(level: Double? = nil, minutesToFull: Int? = nil, watts: Int? = nil, details: Bool? = nil) -> IslandItem {
+    @MainActor static func chargingActivity(level: Double? = nil, minutesToFull: Int? = nil, watts: Int? = nil, details: Bool? = nil, hidePercentage: Bool? = nil) -> IslandItem {
         IslandItem(id: activityID, kind: .liveActivity, priority: 10) {
             Image(systemName: "bolt.fill").islandSymbol(15).foregroundStyle(Palette.green).padding(.leading, 12)
         } trailing: {
             ChargingRing(level: level).padding(.trailing, 10)
         }
-        .peek(onHover: true) { ChargingPeek(level: level, minutesToFull: minutesToFull, watts: watts, details: details) }
+        .peek(onHover: true) { ChargingPeek(level: level, minutesToFull: minutesToFull, watts: watts, details: details, hidePercentage: hidePercentage) }
         .onOptionTap {
             ChargingDetails.shared.shown.toggle()
             Island.shared.quickPeek(true, for: 4)
@@ -193,15 +206,27 @@ private struct ChargingPeek: View {
     var minutesToFull: Int?
     var watts: Int?
     var details: Bool?
+    var hidePercentage: Bool?
     var body: some View {
         let s = PowerState.shared
-        let l = level ?? s.level
-        let m = level == nil ? s.timeToFull : minutesToFull
-        if details ?? ChargingDetails.shared.shown {
-            // The level and the adapter charging it ("46% · 96 W adapter").
-            PeekLabel("\(PowerItems.percent(l)) · " + ((level == nil ? s.adapterWatts : watts).map { "\($0) W adapter" } ?? "Charging"))
+        // The level and the adapter charging it ("46% · 96 W adapter"), or the time to full.
+        PeekLabel(PowerItems.chargingCaption(
+            level: level ?? s.level, minutesToFull: level == nil ? s.timeToFull : minutesToFull, watts: level == nil ? s.adapterWatts : watts,
+            details: details ?? ChargingDetails.shared.shown, hidePercentage: hidePercentage ?? SystemPreferences.shared.hideBatteryPercentage
+        ))
+    }
+}
+
+/// A notification's battery level: the number, or with "Hide percentage" a ring.
+private struct BatteryLevel: View {
+    var level: Double
+    var color: Color
+    var hidePercentage: Bool?
+    var body: some View {
+        if hidePercentage ?? SystemPreferences.shared.hideBatteryPercentage {
+            BatteryRing(level: level, color: color).padding(.trailing, 10)
         } else {
-            PeekLabel(l >= 0.995 ? "Charged · 100%" : m.map { "Full in \(PowerItems.minutes($0))" } ?? "Charging · \(PowerItems.percent(l))")
+            WingText(PowerItems.percent(level), color: color)
         }
     }
 }

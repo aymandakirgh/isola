@@ -1,5 +1,5 @@
+import AppKit
 import CoreLocation
-import Foundation
 
 /// Current conditions from Open-Meteo (no API key) → `WeatherState`. Uses Core Location
 /// only when already authorised (or after "Use current location"), else the city set in settings.
@@ -21,6 +21,9 @@ final class Weather: NSObject, CLLocationManagerDelegate {
     var locationAuthorized: Bool {
         [.authorizedAlways, .authorized].contains(location.authorizationStatus)
     }
+
+    /// Reading it never asks.
+    var locationUndecided: Bool { location.authorizationStatus == .notDetermined }
 
     /// The last fix while it's recent (weather refreshes take one every 30 min): where travel times start.
     var lastLocation: CLLocation? { location.location.flatMap { $0.timestamp.timeIntervalSinceNow > -45 * 60 ? $0 : nil } }
@@ -127,6 +130,26 @@ final class Weather: NSObject, CLLocationManagerDelegate {
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in Weather.shared.refresh() }
+    }
+}
+
+/// Location in a `PermissionRow` (the weather, and travel times for time to leave). Asked for
+/// the way "Use Current Location" asks.
+struct LocationPermission: PermissionKind {
+    var title: String { "Location access" }
+    var detail: String { "Uses your location for the weather and time to leave." }
+
+    @MainActor func status() -> PermissionStatus {
+        Weather.shared.locationAuthorized ? .granted : Weather.shared.locationUndecided ? .notDetermined : .denied
+    }
+
+    @MainActor func request(_ done: @escaping () -> Void) {
+        Weather.shared.useCurrentLocation()
+        done()
+    }
+
+    func openSystemSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices") { NSWorkspace.shared.open(url) }
     }
 }
 
