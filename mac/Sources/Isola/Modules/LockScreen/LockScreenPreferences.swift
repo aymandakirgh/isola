@@ -17,6 +17,13 @@ enum NowPlayingWidgetStyle: String, CaseIterable, Identifiable {
         case .clear: "Clear"
         }
     }
+
+    /// The styles to pick from. Glass is Liquid Glass, new in macOS 26: before it, Glass would draw
+    /// what Frosted draws.
+    static let offered: [NowPlayingWidgetStyle] = if #available(macOS 26, *) { allCases } else { allCases.filter { $0 != .glass } }
+
+    /// As this Mac draws it: a Glass (the default, or one from a Mac on macOS 26) is Frosted before macOS 26.
+    var drawn: NowPlayingWidgetStyle { Self.offered.contains(self) ? self : .frosted }
 }
 
 enum WeatherWidgetStyle: String, CaseIterable, Identifiable {
@@ -49,8 +56,14 @@ final class LockScreenPreferences {
     var showBattery: Bool = load("showBattery", true) { didSet { save("showBattery", showBattery) } }
     var showConnectivity: Bool = load("showConnectivity", true) { didSet { save("showConnectivity", showConnectivity) } }
     var showCalendar: Bool = load("showCalendar", true) { didSet { save("showCalendar", showCalendar) } }
-    var nowPlayingStyle: NowPlayingWidgetStyle = NowPlayingWidgetStyle(rawValue: load("nowPlayingStyle", "glass")) ?? .glass {
-        didSet { save("nowPlayingStyle", nowPlayingStyle.rawValue) }
+    /// As picked, here or on another Mac, and stored (and synced) as it is.
+    private var pickedNowPlayingStyle: NowPlayingWidgetStyle = NowPlayingWidgetStyle(rawValue: load("nowPlayingStyle", "glass")) ?? .glass {
+        didSet { save("nowPlayingStyle", pickedNowPlayingStyle.rawValue) }
+    }
+    /// What the Lock Screen draws and the picker shows: before macOS 26 a Glass reads as Frosted.
+    var nowPlayingStyle: NowPlayingWidgetStyle {
+        get { pickedNowPlayingStyle.drawn }
+        set { pickedNowPlayingStyle = newValue }
     }
     var weatherStyle: WeatherWidgetStyle = WeatherWidgetStyle(stored: load("weatherStyle", "conditions")) {
         didSet { save("weatherStyle", weatherStyle.rawValue) }
@@ -114,7 +127,7 @@ struct LockScreenSettingsView: View {
             }
             Section("Now Playing") {
                 Picker("Style", selection: $prefs.nowPlayingStyle) {
-                    ForEach(NowPlayingWidgetStyle.allCases) { Text($0.title).tag($0) }
+                    ForEach(NowPlayingWidgetStyle.offered) { Text($0.title).tag($0) }
                 }
                 Toggle("Show volume control", isOn: $prefs.showVolumeControl)
                 Toggle("Hide while nothing is playing", isOn: $prefs.hideWhileInactive)

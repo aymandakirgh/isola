@@ -22,17 +22,18 @@ enum LockScreenModule {
         }
         Debug.on("lock.preview") { LockScreenController.shared.preview($0["on"] != "0") }
         Debug.on("lock.pref") { args in for (k, v) in args { LockScreenPreferences.shared.set(k, v) } }
-        // Sun times without a forecast, in minutes from now: `lock.sun rise=600 set=45`.
+        // Sun times without a forecast, in minutes from now (and this Mac's time zone): `lock.sun rise=600 set=45`.
         Debug.on("lock.sun") { args in
             let w = WeatherState.shared, now = Date()
             w.sunrise = args["rise"].flatMap(Double.init).map { [now.addingTimeInterval($0 * 60)] } ?? []
             w.sunset = args["set"].flatMap(Double.init).map { [now.addingTimeInterval($0 * 60)] } ?? []
+            w.timeZone = .current
             w.available = true
         }
         Debug.on("lock.state") { _ in
             let p = LockScreenPreferences.shared, w = WeatherState.shared
             let sun = SunEvent.next(sunrises: w.sunrise, sunsets: w.sunset, after: Date())
-            let next = sun.map { "\($0.rise ? "sunrise" : "sunset")@\($0.time.formatted(date: .omitted, time: .shortened))" } ?? "none"
+            let next = sun.map { "\($0.rise ? "sunrise" : "sunset")@\($0.time.formatted(Date.FormatStyle(date: .omitted, time: .shortened, timeZone: w.timeZone)))" } ?? "none"
             Debug.reply("nowPlayingStyle=\(p.nowPlayingStyle.rawValue) weatherStyle=\(p.weatherStyle.rawValue) sun=\(next)")
         }
     }
@@ -57,6 +58,9 @@ enum LockScreenModule {
         precondition(SunEvent.next(sunrises: [t], sunsets: [], after: t) == nil, "nothing ahead, nothing shown")
         precondition(WeatherWidgetStyle(stored: "detailed") == .precipitation && WeatherWidgetStyle(stored: "sun") == .sun
             && WeatherWidgetStyle(stored: "compact") == .compact && WeatherWidgetStyle(stored: "?") == .conditions, "stored weather styles")
+        let liquidGlass = if #available(macOS 26, *) { true } else { false }
+        precondition(NowPlayingWidgetStyle.offered.contains(.glass) == liquidGlass && NowPlayingWidgetStyle.glass.drawn == (liquidGlass ? .glass : .frosted)
+            && NowPlayingWidgetStyle.offered.allSatisfy { $0.drawn == $0 }, "Glass only where it's Liquid Glass (macOS 26), else it reads as Frosted")
     }
 }
 

@@ -136,6 +136,7 @@ final class WeatherState {
     var precipitationDetail: String?  // "Rain at 18:00 · 60%"; nil when the next hours stay dry
     var sunrise: [Date] = []  // the forecast's days, from today
     var sunset: [Date] = []
+    var timeZone = TimeZone.current  // the forecast place's: its sun times read in it, as the rain outlook's do
     var place = ""
     var displayTemperature: String {
         let t = useFahrenheit ? temperature * 9 / 5 + 32 : temperature

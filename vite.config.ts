@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
-import { RELEASES } from "./src/content/releases";
+import { RELEASES, type Release } from "./src/content/releases";
 
 const BRAND = "Isola";
 const SITE = "https://isola-ruby.vercel.app";
@@ -65,10 +65,28 @@ function routeMeta(): Plugin {
           );
         writeFileSync(resolve(dist, `${p.file}.html`), out);
       }
-      // Update feed the Mac app polls once a day.
-      const { version, build, published_at, minimum_system_version } = RELEASES.stable;
-      const feed = { version, build, published_at, minimum_system_version, url: `${SITE}/download` };
-      writeFileSync(resolve(dist, "releases.json"), JSON.stringify(feed, null, 2));
+      // Update feed the Mac app polls once a day, in the shape Updates.Feed decodes (mac/Sources/Isola/
+      // Modules/Settings/License.swift): the stable release at the top level, Early bird's under "beta".
+      // Fields a release doesn't have stay out (JSON.stringify drops undefined); its url is the download
+      // page unless it has its own.
+      const entry = ({
+        assets: _,
+        url = "/download",
+        zip,
+        ...release
+      }: Release) => ({
+        ...release,
+        url: new URL(url, SITE).href,
+        zip: zip ? new URL(zip, SITE).href : undefined,
+      });
+      const feed = {
+        ...entry(RELEASES.stable),
+        beta: RELEASES.beta && entry(RELEASES.beta),
+      };
+      writeFileSync(
+        resolve(dist, "releases.json"),
+        JSON.stringify(feed, null, 2),
+      );
     },
   };
 }

@@ -49,6 +49,24 @@ test("the download is the real DMG the card describes", async ({
   await expect(page.getByText(`v${feed.version}`)).toBeVisible();
 });
 
+test("the update feed has the shape the Mac app decodes (Updates.Feed)", async ({
+  request,
+}) => {
+  const feed = await (await request.get("/releases.json")).json();
+  for (const release of [feed, feed.beta].filter(Boolean)) {
+    expect(release.version).toMatch(/^\d+(\.\d+)*$/);
+    expect(release.url).toMatch(/^https:\/\//);
+    expect(release.assets).toBeUndefined();
+    // Update Now… installs in place only with all three: a zip at an absolute URL, its SHA-256 and signature.
+    expect([0, 3]).toContain(
+      ["zip", "sha256", "signature"].filter((key) => key in release).length,
+    );
+    if (release.zip) expect(release.zip).toMatch(/^https:\/\//);
+  }
+  // When Isola can't install it in place it opens the url: the stable's download page serves the stable DMG.
+  if (feed.beta) expect(feed.beta.url).not.toBe(feed.url);
+});
+
 test("the purchase page shows a license key (the shared demo key without /api)", async ({
   page,
 }) => {

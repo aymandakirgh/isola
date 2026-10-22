@@ -1,5 +1,6 @@
 #!/bin/bash
-# Builds build/Isola.app (ad-hoc signed) and build/Isola.dmg. Usage: scripts/build.sh [debug|release]
+# Builds build/Isola.app (ad-hoc signed) and build/Isola.dmg; a release build also makes the in-place
+# update, build/Isola.zip, and build/release.json. Usage: scripts/build.sh [debug|release]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG=${1:-release}
@@ -38,5 +39,24 @@ Or, in Terminal: xattr -dr com.apple.quarantine /Applications/Isola.app
 TXT
   rm -f build/Isola.dmg
   hdiutil create -quiet -volname Isola -srcfolder "$STAGE" -format UDZO build/Isola.dmg
+fi
+if [[ "$CONFIG" == release ]]; then
+  # Update Now…: the app zipped the way Updates.unpack unzips it, its SHA-256 and its Ed25519 signature
+  # (scripts/update_key.swift). At release, build/Isola.zip ships as public/downloads/Isola-$VERSION.zip
+  # and release.json's fields go into src/content/releases.ts, which builds the site's releases.json.
+  rm -f build/Isola.zip
+  ditto -c -k --keepParent "$APP" build/Isola.zip
+  SHA256=$(shasum -a 256 build/Isola.zip | cut -d ' ' -f 1)
+  SIGNATURE=
+  if [[ -f ~/.config/isola/update-signing.key ]]; then
+    SIGNATURE=$(swift scripts/update_key.swift sign build/Isola.zip)
+  else
+    echo "no update signing key (swift scripts/update_key.swift keygen): release.json has no signature, so Isola won't install this zip in place"
+  fi
+  {
+    printf '{\n  "version": "%s",\n  "build": %s,\n  "zip": "/downloads/Isola-%s.zip",\n  "sha256": "%s"' "$VERSION" "$BUILD" "$VERSION" "$SHA256"
+    if [[ -n "$SIGNATURE" ]]; then printf ',\n  "signature": "%s"' "$SIGNATURE"; fi
+    printf '\n}\n'
+  } > build/release.json
 fi
 echo "built $APP ($VERSION/$BUILD)"
