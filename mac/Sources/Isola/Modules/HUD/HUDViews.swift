@@ -13,13 +13,12 @@ struct HUDPart: View {
     private var glowing: Bool { look.style == .glow && !silent }
 
     /// What the narrow trailing wing carries.
-    enum Wing: Equatable { case empty, bar, percent, decibels, mute }
+    enum Wing: Equatable { case bar, percent, decibels, mute }
 
-    /// With labels the bar and the number sit in the row below, so the wing keeps only decibels;
-    /// without, it holds the bar, or the number (or "Mute") instead of it.
+    /// Never blank: the number (the percentage, or decibels) or, with neither, a compact bar. Muted,
+    /// the number reads "Mute", unless the label row below already says "Muted".
     static func wing(labels: Bool, showPercentage: Bool, decibels: Bool, silent: Bool) -> Wing {
-        if labels { return decibels && !silent ? .decibels : .empty }
-        if silent { return showPercentage || decibels ? .mute : .bar }
+        if silent, !labels, showPercentage || decibels { return .mute }
         return decibels ? .decibels : showPercentage ? .percent : .bar
     }
 
@@ -97,7 +96,6 @@ struct HUDPart: View {
 
     @ViewBuilder private var value: some View {
         switch Self.wing(labels: look.labels, showPercentage: look.showPercentage, decibels: look.style == .decibel && s.kind == .volume, silent: silent) {
-        case .empty: EmptyView()
         case .bar: bar(0.25).frame(width: 26)
         case .percent: valueText(percent)
         case .decibels: valueText(decibelText)
@@ -114,7 +112,6 @@ struct HUDPart: View {
                 .frame(maxWidth: 74, alignment: .leading)
                 .fixedSize(horizontal: true, vertical: false)
             bar(0.07)
-            if look.showPercentage { valueText(percent).fixedSize() }
         }
         .padding(.horizontal, 14)
         .padding(.bottom, 5)
@@ -207,6 +204,7 @@ struct HUDSettingsView: View {
                     ForEach(HUDProgressStyle.allCases.filter { $0.fits(kind) }) { Text($0.title).tag($0) }
                 }
                 Toggle("Show percentage", isOn: binding(kind, \.showPercentage))
+                    .disabled(hud.look(kind).style == .decibel)
                 Toggle("Show labels", isOn: binding(kind, \.labels))
                 if kind == .volume {
                     Picker("Output device", selection: $hud.outputStyle) {
@@ -217,6 +215,8 @@ struct HUDSettingsView: View {
                 }
             } header: {
                 Text(kind == .volume ? "Sound HUD" : "Display HUD")
+            } footer: {
+                if hud.look(kind).style == .decibel { note("Decibels shows the level in dB, in place of the percentage.") }
             }
             Section {
                 Picker("Speed", selection: binding(kind, \.speed)) {

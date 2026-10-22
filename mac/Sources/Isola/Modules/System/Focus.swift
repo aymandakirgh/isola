@@ -83,13 +83,16 @@ final class FocusMonitor {
         known[id] == nil && id != genericID && id != "debug"
     }
 
-    /// The Allowed list: the built-in modes by name, then custom ones seen so far.
-    nonisolated static func listed(seen: [String: [String]]) -> [Mode] {
+    /// The Allowed list: the built-in modes by their name in `language`, then custom ones seen so far.
+    nonisolated static func listed(seen: [String: [String]], language: String = FocusL10n.language) -> [Mode] {
         let builtIn = known.map { id, mode in Mode(id: id, name: mode.name, symbol: mode.symbol, tint: mode.tint) }
         let custom = seen.filter { isCustom($0.key) }.map { id, info in
             Mode(id: id, name: info.first ?? "Focus", symbol: info.count > 1 ? info[1] : "moon.fill", tint: .systemIndigo)
         }
-        return builtIn.sorted { $0.name < $1.name } + custom.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let byTitle = { (a: Mode, b: Mode) in
+            FocusL10n.text(a.name, language: language).localizedStandardCompare(FocusL10n.text(b.name, language: language)) == .orderedAscending
+        }
+        return builtIn.sorted(by: byTitle) + custom.sorted(by: byTitle)
     }
 
     nonisolated static func read() -> Mode? {

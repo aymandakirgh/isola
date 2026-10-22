@@ -56,10 +56,12 @@ final class SystemPreferences {
     var deviceLowBattery = flag("system.deviceLowBattery", true) {
         didSet { store.set(deviceLowBattery, forKey: "system.deviceLowBattery") }
     }
-    /// Devices' own first warning level (0...1); their second one fires at 10% too.
-    var deviceLowBatteryThreshold = store.object(forKey: "system.deviceLowBatteryThreshold") as? Double ?? 0.2 {
-        didSet { store.set(deviceLowBatteryThreshold, forKey: "system.deviceLowBatteryThreshold") }
+    /// Devices' own first warning level (0...1), the Mac's until set; their second one fires at 10% too.
+    var deviceLowBatteryThreshold: Double {
+        get { deviceLevel ?? lowBatteryThreshold }
+        set { deviceLevel = newValue; store.set(newValue, forKey: "system.deviceLowBatteryThreshold") }
     }
+    private var deviceLevel = store.object(forKey: "system.deviceLowBatteryThreshold") as? Double
     var deviceLowBatterySound = flag("system.deviceLowBatterySound", true) {
         didSet { store.set(deviceLowBatterySound, forKey: "system.deviceLowBatterySound"); if deviceLowBatterySound { Sounds.lowBattery() } }
     }
@@ -163,7 +165,12 @@ struct SystemSettingsView: View {
         } header: {
             Text("Allowed Notifications")
         } footer: {
-            note("Modes switched off here change quietly. Custom modes join the list once Isola has seen them on.")
+            // Read like the Full Disk Access row above: every 2 s, never probed in the gallery.
+            TimelineView(.periodic(from: .now, by: 2)) { _ in
+                note(!SystemModule.renderingGallery && FocusMonitor.canReadDatabase
+                    ? "Modes switched off here change quietly. Custom modes join the list once Isola has seen them on."
+                    : "These switches need Full Disk Access: without it Isola can’t tell one Focus from another, so only “Focus changes” above applies.")
+            }
         }
         .disabled(!prefs.focusNotification)
     }

@@ -356,10 +356,10 @@ enum CalendarModule {
             at(1, 18, "Gym", .systemGreen), at(1, 20, "Concert", .systemPink), at(3, 11, "Review", .systemPurple),
         ]
         let span = CalendarSource.range(for: day, monthView: true)
-        func panelWith(_ list: [CalendarEvent], dots: DayDots = .colored, monthView: Bool = false, selected: Date? = nil, at time: Date = now) -> CalendarPanel {
+        func panelWith(_ list: [CalendarEvent], dots: DayDots = .colored, monthView: Bool = false, selected: Date? = nil, card: Bool = true, at time: Date = now) -> CalendarPanel {
             CalendarPanel(
                 events: list, weekCounts: CalendarSource.counts(list, in: span), weekColors: CalendarSource.colors(list, in: span), weather: weather,
-                timer: nil, dismissedCount: 0, lunar: false, now: time, monthView: monthView, dots: dots, selectedDay: selected
+                timer: nil, dismissedCount: 0, lunar: false, now: time, weatherOnEmptyDay: card, monthView: monthView, dots: dots, selectedDay: selected
             )
         }
         Gallery.island("calendar-expanded-colored-dots", item: CalendarItems.event(review, panel: panelWith(busyWeek)), expanded: true)
@@ -379,11 +379,16 @@ enum CalendarModule {
         Gallery.island("calendar-expanded-more-allday", item: CalendarItems.event(review, panel: panelWith(crowded)), expanded: true)
         Gallery.island("calendar-expanded-more-events", item: CalendarItems.event(review, panel: panelWith(Array(crowded.dropFirst(3)))), expanded: true)
         Gallery.island("calendar-expanded-more-month", item: CalendarItems.event(review, panel: panelWith(Array(crowded.dropFirst(3)), monthView: true), size: month), expanded: true)
-        // Today done: "No more events today"; nothing at all: "Your day is clear"; tomorrow's events once today is over.
+        // Today done: "That’s all for today"; nothing at all: "Nothing planned today"; tomorrow's events once today
+        // is over, or with the weather card on, the card and tomorrow's line.
         let late = Calendar.current.date(bySettingHour: 23, minute: 0, second: 0, of: now)!
         Gallery.island("calendar-expanded-done", item: CalendarItems.event(review, panel: panelWith([at(0, 9, "Stand-up", .systemTeal)], at: late)), expanded: true)
         Gallery.island("calendar-expanded-clear", item: CalendarItems.event(review, panel: panelWith([], at: late)), expanded: true)
-        Gallery.island("calendar-expanded-tomorrow", item: CalendarItems.event(review, panel: panelWith(busyWeek.filter { $0.start >= tomorrow }, at: late)), expanded: true)
+        let later = busyWeek.filter { $0.start >= tomorrow }
+        Gallery.island("calendar-expanded-tomorrow", item: CalendarItems.event(review, panel: panelWith(later, card: false, at: late)), expanded: true)
+        Gallery.island("calendar-expanded-tomorrow-weather", item: CalendarItems.event(review, panel: panelWith(later, at: late)), expanded: true)
+        // The month view under today's all-day chip has no room for the heading: tomorrow's rows go on without it.
+        Gallery.island("calendar-expanded-tomorrow-month", item: CalendarItems.event(review, panel: panelWith([events[0]] + later, monthView: true, card: false, at: late), size: month), expanded: true)
         // A picked day: its events, or a day with none.
         Gallery.island("calendar-expanded-picked", item: CalendarItems.event(review, panel: panelWith(busyWeek, selected: tomorrow)), expanded: true)
         Gallery.island("calendar-expanded-picked-clear", item: CalendarItems.event(review, panel: panelWith(busyWeek, selected: Calendar.current.date(byAdding: .day, value: 2, to: day)!)), expanded: true)

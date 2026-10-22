@@ -12,9 +12,11 @@ final class CalendarSource {
     private var ticker: Timer?
     /// Fires at the followed event's next edge (its start, then its end), between ticks.
     private var edgeTimer: Timer?
-    private var announced: String?
-    /// Events whose start already peeked (Quick peek › When event is starting).
-    private var startPeeked: Set<String> = []
+    /// Events already announced (title peeked, sound played) → their end: each one is announced once,
+    /// across launches too, so logging back in during an event stays quiet.
+    private var announced = UserDefaults.standard.dictionary(forKey: "calendar.announced") as? [String: Date] ?? [:] {
+        didSet { UserDefaults.standard.set(announced, forKey: "calendar.announced") }
+    }
     private var leaveNotified: Set<String> = []
     /// The event the live activity follows (its right-click menu acts on it).
     private(set) var shown: CalendarEvent?
@@ -78,9 +80,7 @@ final class CalendarSource {
         model.events = events
         model.weekCounts = Self.counts(events, in: range)
         model.weekColors = Self.colors(events, in: range)
-        let ids = Set(state.today.map(\.id))
-        startPeeked.formIntersection(ids)
-        leaveNotified.formIntersection(ids)
+        leaveNotified.formIntersection(state.today.map(\.id))
         evaluate()
     }
 
@@ -141,6 +141,16 @@ final class CalendarSource {
         return timed.last { $0.end > now && $0.end.timeIntervalSince($0.start) < 86400 }
     }
 
+    /// `announced` with `event` added when it is announced now: on appearing, or with the start peek
+    /// at its start, and only the first time. Nil when it isn't. Events over before today drop out.
+    nonisolated static func announcing(_ event: CalendarEvent, now: Date, timing: PeekTiming, announced: [String: Date]) -> [String: Date]? {
+        guard timing != .start || now >= event.start, announced[event.id] == nil else { return nil }
+        let today = Calendar.current.startOfDay(for: now)
+        var kept = announced.filter { $0.value > today }
+        kept[event.id] = event.end
+        return kept
+    }
+
     /// Runs every 30 s (and at the followed event's start and end): show the event's live
     /// activity, peek and chime as set, fire time-to-leave alerts.
     func evaluate() {
@@ -152,14 +162,10 @@ final class CalendarSource {
         edgeTimer?.invalidate()
         if let event = shown {
             Island.shared.start(CalendarItems.event(event))
-            if announced != event.id {
-                announced = event.id
-                // First appearance: the title peeks and the sound plays, unless they wait for the start.
-                if prefs.peekTiming == .appear { peek() }
-                if prefs.eventSound, prefs.peekTiming != .start { CalendarSounds.event() }
-            }
-            if prefs.peekTiming == .start, now >= event.start, startPeeked.insert(event.id).inserted {
-                peek()
+            // First appearance (or the start, with the start peek): the title peeks and the sound plays.
+            if let updated = Self.announcing(event, now: now, timing: prefs.peekTiming, announced: announced) {
+                announced = updated
+                if prefs.peekTiming != .off { peek() }
                 if prefs.eventSound { CalendarSounds.event() }
             }
             let edge = [event.start, prefs.hideDuringEvents ? event.start.addingTimeInterval(5 * 60) : event.end].filter { $0 > now }.min()
@@ -171,7 +177,6 @@ final class CalendarSource {
                 edgeTimer = timer
             }
         } else {
-            announced = nil
             Island.shared.end(CalendarItems.eventID)
         }
 
@@ -335,6 +340,14 @@ final class CalendarSource {
         precondition(Self.followed([event(at(-1, 9), at(1, 9))], now: at(0, 12), lead: 600, hideDuringEvents: false) == nil, "multi-day events aren't followed")
         precondition(Self.followed([event(at(0, 9), at(0, 9))], now: at(0, 9.05), lead: 600, hideDuringEvents: false) != nil, "zero-length: Now for 5 minutes")
         precondition(Self.followed([event(at(0, 0), at(1, 0), allDay: true)], now: at(0, 9), lead: 600, hideDuringEvents: false) == nil, "all-day events")
+        // Announced once: A (9:00–10:00) on appearing, then B (9:30–9:45); A coming back at 9:45 stays quiet.
+        let a = event(at(0, 9), at(0, 10), id: "a"), b = event(at(0, 9.5), at(0, 9.75), id: "b")
+        let both = announcing(a, now: at(0, 8.9), timing: .appear, announced: [:]).flatMap { announcing(b, now: at(0, 9.5), timing: .appear, announced: $0) }
+        precondition(both?.count == 2 && announcing(a, now: at(0, 9.76), timing: .appear, announced: both ?? [:]) == nil, "each event announced once")
+        precondition(announcing(a, now: at(0, 8.9), timing: .start, announced: [:]) == nil && announcing(a, now: at(0, 9), timing: .start, announced: [:]) != nil,
+            "the start peek waits for the start")
+        precondition(announcing(event(at(1, 9), at(1, 10), id: "c"), now: at(1, 8.9), timing: .appear, announced: both ?? [:])?.keys.sorted() == ["c"],
+            "yesterday's announced events drop out")
 
         // Loaded days: the week and tomorrow; the month view's 6 weeks around the 1st.
         let sunday = cal.dateInterval(of: .weekOfYear, for: day)!.end.addingTimeInterval(-3600)

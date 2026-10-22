@@ -235,7 +235,9 @@ enum SystemModule {
             && FocusMonitor.announces(FocusMonitor.genericID, enabled: true, muted: ["com.apple.focus.work"]) && !FocusMonitor.announces(FocusMonitor.genericID, enabled: false, muted: []),
             "Focus allowed list")
         let listed = FocusMonitor.listed(seen: ["custom-1": ["Deep Work", "laptopcomputer"], "com.apple.focus.work": ["Work", "briefcase.fill"]])
-        precondition(listed.count == FocusMonitor.known.count + 1 && listed.first?.name == "Do Not Disturb" && listed.last?.id == "custom-1", "built-in modes by name, then custom ones")
+        precondition(listed.count == FocusMonitor.known.count + 1 && listed.last?.id == "custom-1", "built-in modes, then custom ones")
+        precondition(FocusMonitor.listed(seen: [:], language: "en").prefix(2).map(\.name) == ["Do Not Disturb", "Driving"]
+            && FocusMonitor.listed(seen: [:], language: "it").prefix(2).map(\.name) == ["Fitness", "Driving"], "built-in modes by their name in the user's language")
         // Low battery: the chosen level, then 10%; a level already under both warns once.
         precondition(PowerMonitor.warning(level: 0.18, threshold: 0.2, warned: 1) == 0.2 && PowerMonitor.warning(level: 0.17, threshold: 0.2, warned: 0.2) == nil
             && PowerMonitor.warning(level: 0.09, threshold: 0.2, warned: 0.2) == 0.1 && PowerMonitor.warning(level: 0.05, threshold: 0.3, warned: 1) == 0.1

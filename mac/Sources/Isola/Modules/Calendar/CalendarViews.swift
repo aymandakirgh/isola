@@ -343,7 +343,7 @@ struct CalendarPanel: View {
             } else {
                 WeekStrip(counts: weekCounts, colors: weekColors, dots: dots, lunar: lunar, now: now, selected: selectedDay).frame(height: 48)
             }
-            agenda.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.top, 6)
+            agenda.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.top, 4)
             footer.frame(height: 24)
         }
         .padding(.horizontal, 18)
@@ -381,22 +381,32 @@ struct CalendarPanel: View {
         }
     }
 
-    /// Today: all-day chips, then what's left of the day; once it's done, tomorrow.
+    /// Today: all-day chips, then what's left of the day; once it's done, tomorrow, or with the
+    /// weather card on, the card and tomorrow as one line under it.
     @ViewBuilder private var todayAgenda: some View {
         let todays = events.on(today)
         let allDay = splitAllDay ? todays.filter(\.isAllDay) : []
         let upcoming = todays.filter { (!splitAllDay || !$0.isAllDay) && $0.end > now }
         let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: today)!
         let tomorrows = events.on(tomorrow)
+        let card = weatherOnEmptyDay ? weather : nil
+        let heading = "Tomorrow · \(CalendarText.events(tomorrows.count))"
         VStack(alignment: .leading, spacing: 6) {
             if !allDay.isEmpty { AllDayChips(events: allDay, now: now, colors: colors) }
             if !upcoming.isEmpty {
                 EventRows(events: upcoming, limit: allDay.isEmpty ? 2 : 1, now: now, colors: colors)
-            } else if !tomorrows.isEmpty {
-                Heading(text: "Tomorrow · \(CalendarText.events(tomorrows.count))")
-                EventRows(events: tomorrows, limit: 2, now: now, colors: colors, trailing: .tomorrow, day: tomorrow)
+            } else if !tomorrows.isEmpty, card == nil {
+                EventRows(events: tomorrows, limit: 2, now: now, colors: colors, trailing: .tomorrow, day: tomorrow, heading: heading)
             } else {
-                EmptyDay(title: todays.contains { !$0.isAllDay } ? "No more events today" : "Your day is clear", weather: weatherOnEmptyDay ? weather : nil)
+                // Whichever fits: the card and tomorrow's line, the card, the card without its detail line.
+                let title = todays.contains { !$0.isAllDay } ? "That’s all for today" : "Nothing planned today"
+                ViewThatFits(in: .vertical) {
+                    if !tomorrows.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) { EmptyDay(title: title, weather: card); Heading(text: heading) }
+                    }
+                    EmptyDay(title: title, weather: card)
+                    EmptyDay(title: title, weather: card, detail: false)
+                }
             }
         }
     }
@@ -405,13 +415,16 @@ struct CalendarPanel: View {
     @ViewBuilder private func dayAgenda(_ day: Date) -> some View {
         let list = events.on(day)
         let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: today)!
-        VStack(alignment: .leading, spacing: 6) {
-            Heading(text: list.isEmpty ? CalendarText.dayTitle(day) : "\(CalendarText.dayTitle(day)) · \(CalendarText.events(list.count))")
-            if list.isEmpty {
+        if list.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Heading(text: CalendarText.dayTitle(day))
                 Text(day < today ? "No events" : "Nothing planned yet").font(.system(size: 12.5, weight: .semibold))
-            } else {
-                EventRows(events: list, limit: 2, now: now, colors: colors, trailing: day == tomorrow ? .tomorrow : .none, day: day)
             }
+        } else {
+            EventRows(
+                events: list, limit: 2, now: now, colors: colors, trailing: day == tomorrow ? .tomorrow : .none, day: day,
+                heading: "\(CalendarText.dayTitle(day)) · \(CalendarText.events(list.count))"
+            )
         }
     }
 
@@ -628,7 +641,10 @@ private struct MutedChip: View {
     }
 }
 
-/// Up to `limit` rows, as many as fit, and a muted "2 more events" line for the rest.
+/// The heading, up to `limit` rows and a muted "2 more events" line for the rest. Rows win over the
+/// line: without room for it the count moves into the last row (a heading already has it), then one
+/// row with the line, one without, and one without the heading. The count always shows, and that
+/// last option fits under the all-day chips in either panel.
 private struct EventRows: View {
     var events: [CalendarEvent]
     var limit: Int
@@ -637,19 +653,32 @@ private struct EventRows: View {
     var trailing = EventRow.Trailing.countdown
     /// The day the rows are listed under (multi-day spans count from it).
     var day: Date?
+    /// "Tomorrow · 3 events" above the rows.
+    var heading: String?
 
     var body: some View {
         ViewThatFits(in: .vertical) {
-            if limit > 1 { rows(limit) }
-            rows(1)
+            if limit > 1 {
+                rows(limit, line: true)
+                rows(limit, line: false)
+            }
+            rows(1, line: true)
+            rows(1, line: false)
+            if heading != nil { rows(1, line: false, headed: false) }
         }
     }
 
-    private func rows(_ shown: Int) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(events.prefix(shown)) { EventRow(event: $0, now: now, colors: colors, trailing: trailing, day: day ?? now) }
-            if events.count > shown {
-                Text(CalendarText.more(events.count - shown))
+    private func rows(_ shown: Int, line: Bool, headed: Bool = true) -> some View {
+        let list = events.prefix(shown)
+        let more = events.count - list.count
+        let inRow = more > 0 && !line && !(headed && heading != nil)
+        return VStack(alignment: .leading, spacing: 6) {
+            if headed, let heading { Heading(text: heading) }
+            ForEach(list) { e in
+                EventRow(event: e, now: now, colors: colors, trailing: trailing, day: day ?? now, more: inRow && e.id == list.last?.id ? CalendarText.more(more) : nil)
+            }
+            if line, more > 0 {
+                Text(CalendarText.more(more))
                     .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Palette.muted)
                     .padding(.leading, 11)
             }
@@ -665,6 +694,8 @@ private struct EventRow: View {
     var colors: Bool
     var trailing = Trailing.countdown
     var day: Date
+    /// The rows' "2 more events", under the trailing text when there's no room for its own line.
+    var more: String?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -676,16 +707,19 @@ private struct EventRow: View {
                     .font(.system(size: 10.5, weight: .medium)).foregroundStyle(Palette.muted).lineLimit(1)
             }
             Spacer(minLength: 6)
-            switch trailing {
-            case .countdown:
-                let started = event.start <= now
-                Text(started ? CalendarText.timeLeft(event, at: now).map { "\($0) left" } ?? "Now" : "in \(CalendarText.countdown(to: event.start, from: now))")
-                    .font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                    .foregroundStyle(started ? Palette.amber : Palette.muted)
-            case .tomorrow:
-                Text("TMRW").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
-            case .none:
-                EmptyView()
+            VStack(alignment: .trailing, spacing: 1) {
+                switch trailing {
+                case .countdown:
+                    let started = event.start <= now
+                    Text(started ? CalendarText.timeLeft(event, at: now).map { "\($0) left" } ?? "Now" : "in \(CalendarText.countdown(to: event.start, from: now))")
+                        .font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(started ? Palette.amber : Palette.muted)
+                case .tomorrow:
+                    Text("TMRW").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.muted)
+                case .none:
+                    EmptyView()
+                }
+                if let more { Text(more).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Palette.muted).fixedSize() }
             }
         }
     }
@@ -702,6 +736,7 @@ private struct Heading: View {
 private struct EmptyDay: View {
     var title: String
     var weather: WeatherSnapshot?
+    var detail = true
     var body: some View {
         HStack(spacing: 10) {
             if let weather {
@@ -711,8 +746,8 @@ private struct EmptyDay: View {
                 Text(title).font(.system(size: 12.5, weight: .semibold))
                 if let weather {
                     Text("\(weather.temperature) · \(weather.condition)").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.muted)
-                    if let detail = weather.detail {
-                        Text(detail).font(.system(size: 10.5, weight: .medium)).foregroundStyle(Palette.muted)
+                    if detail, let line = weather.detail {
+                        Text(line).font(.system(size: 10.5, weight: .medium)).foregroundStyle(Palette.muted)
                     }
                 }
             }

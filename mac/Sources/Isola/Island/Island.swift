@@ -164,11 +164,11 @@ final class Island {
 
     // MARK: - Transients (notifications and HUDs)
 
-    /// `animation` springs a HUD in and out at its own speed (HUDs › Motion); nil uses the island's.
-    func post(_ item: IslandItem, duration: TimeInterval? = nil, animation: Animation? = nil) {
+    /// `animation` and `collapse` spring a HUD in and out at its own speed (HUDs › Motion); nil uses the island's.
+    func post(_ item: IslandItem, duration: TimeInterval? = nil, animation: Animation? = nil, collapse: Animation? = nil) {
         let seconds = duration ?? Preferences.shared.notificationDuration
         transientTimer?.invalidate()
-        transientAnimation = animation
+        transientAnimation = collapse
         if transient?.id == item.id {
             transient = item  // same notification/HUD again: refresh content, extend timer
         } else {
