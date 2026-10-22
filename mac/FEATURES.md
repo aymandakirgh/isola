@@ -9,9 +9,9 @@ Every line of the reference app's public changelog (165 items, versions 1.0–1.
 - **Missing**: not implemented. **Blocked**: needs something this project can't have (Apple entitlements or notarization, a third-party account, hardware).
 - **N/A**: a line about the reference product's own history rather than a capability.
 
-**165 items:** ✅ Done 138 · 🔶 Built, unverified 23 · 🟡 Partial 2 · ⛔ Blocked 2
+**165 items:** ✅ Done 139 · 🔶 Built, unverified 22 · 🟡 Partial 2 · ⛔ Blocked 2
 
-**Seen live:** 63 of them were exercised on the test Mac (✓ column), with real system data or with simulated input through the same code path (`isolactl`). The rest were checked by reading the code and by the offscreen `--gallery` self-checks.
+**Seen live:** 65 of them were exercised on the test Mac (✓ column), with real system data or with simulated input through the same code path (`isolactl`). The rest were checked by reading the code and by the offscreen `--gallery` self-checks.
 
 Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1 Pro, clamshell, one 2560×1440 display, macOS 27) with `isolactl` and `scripts/tour.sh`; permission-gated paths (system audio capture, location, Bluetooth, calendars) were not triggered on that shared machine.
 
@@ -80,7 +80,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 54 | Added click on todays date to open calendar | ✅ Done |  | `Sources/Isola/Modules/Calendar/CalendarViews.swift:325-326` | Today's cell in the week strip is a button that opens the chosen calendar app. |
 | 55 | Added expanded calendar | ✅ Done | ✓ | `Sources/Isola/Modules/Calendar/CalendarViews.swift:227-309,25,51,71` | Month, week strip, agenda, weather and timers. Reachable only with an upcoming event, a running timer, or the idle-date setting on. |
 | 56 | Added swipe to dismiss QuickPeek | ✅ Done |  | `Sources/Isola/Island/IslandWindows.swift:166; Sources/Isola/Island/Island.swift:157` | Swipe up hides the quick peek; swipe direction now follows the fingers under natural scrolling (self-checked). |
-| 57 | Added idle activity option | ✅ Done |  | `calendar.idleActivity; Sources/Isola/Modules/Calendar/CalendarModule.swift:72-74; Sources/Isola/Modules/Calendar/CalendarViews.swift:62-72` | Opt-in low-priority date activity showing next-event countdown or temperature. |
+| 57 | Added idle activity option | ✅ Done |  | `Sources/Isola/Modules/Modules.swift:32; Sources/Isola/Modules/Calendar/CalendarViews.swift:80-90` | Idle Activity (Settings › Island): a quiet date activity with the next event's countdown or the temperature, kept when nothing else runs; right-click opens the calendar app. |
 
 ## 1.5
 
@@ -105,7 +105,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 
 | # | Feature | Status | Seen live | Evidence | Note |
 |---|---|---|---|---|---|
-| 72 | Added time to leave notifications | 🔶 Built, unverified |  | `Sources/Isola/Modules/Calendar/TravelTime.swift:48` | Apple Maps ETA from the current location when location access is already granted; else fixed minutes. Leave UI seen live. |
+| 72 | Added time to leave notifications | ✅ Done | ✓ | `Sources/Isola/Modules/Calendar/TravelTime.swift:48,87` | Apple Maps ETA from the current location when location access is granted, else fixed minutes. Seen live with location allowed: the ETA from here moved the leave time; right-click gives the event's menu. |
 | 73 | Added exclude subscribed calendars option | ✅ Done |  | `calendar.excludeSubscribed; Sources/Isola/Modules/Calendar/CalendarSource.swift:51` | Drops calendars of EKCalendarType .subscription before querying. |
 | 74 | Added calendar live activity | ✅ Done | ✓ | `calendar.liveActivity, calendar.leadMinutes; Sources/Isola/Modules/Calendar/CalendarSource.swift:66-84` | Next EventKit event becomes a countdown activity with peek and expanded calendar. |
 | 75 | Added rain condition details to precipitation | ✅ Done | ✓ | `Sources/Isola/Modules/Calendar/Weather.swift:79` | "Rain at 18:00 · 60%", "Snow from 07:00 · 80%", "Showers now"; empty-day view and Lock Screen detailed weather. |
@@ -122,7 +122,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 81 | Added visible mute to volume control | ✅ Done | ✓ | `Sources/Isola/Modules/Media/MediaViews.swift:472` | Mute toggle in the volume row. When muted, the speaker is slashed there and on the output button, and the bar dims. |
 | 82 | Added connectivity widget | ✅ Done | ✓ | `lockscreen.showConnectivity; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:417-429` | Connected Bluetooth devices with battery rings from IOBluetooth/system_profiler. |
 | 83 | Added battery widget | ✅ Done | ✓ | `lockscreen.showBattery; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:409-416; Sources/Isola/Modules/System/Power.swift:39-58` | IOKit internal battery level and charging state. |
-| 84 | Added weather widget style | ✅ Done | ✓ | `lockscreen.weatherStyle; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:401-406` | Compact (temperature) or detailed (condition plus rain chance). |
+| 84 | Added weather widget style | ✅ Done | ✓ | `Sources/Isola/Modules/LockScreen/LockScreenPreferences.swift:29; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:48-59` | Conditions, Precipitation or Sunrise & Sunset (in the forecast place's time zone); a stored 'detailed' reads as Precipitation. |
 | 85 | Added keep awake to Lock Screen | ✅ Done |  | `lockscreen.keepAwake; Sources/Isola/Modules/LockScreen/LockScreenModule.swift:62,125-135` | PreventUserIdleDisplaySleep IOPM assertion while locked. |
 | 86 | Added output volume controls | ✅ Done | ✓ | `Sources/Isola/Modules/Media/MediaViews.swift:472` | Output button reveals a draggable volume slider for the default output (HUD's SystemAudio). HUD stays quiet meanwhile (quietUntil). |
 | 87 | Added option to show volume control on widget | ✅ Done | ✓ | `lockscreen.showVolumeControl; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:493` | Adds a draggable output-volume row (VirtualMainVolume) to the Lock Screen card. |
@@ -133,7 +133,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 92 | Added EarPods as supported output device | ✅ Done |  | `Sources/Isola/Modules/Media/MediaViews.swift:447` | EarPods, AirPods/Pro/Max, Beats, HomePod and HDMI glyph + name come from HUDOutput. Covered by the self-check. |
 | 93 | Added option to disable in fullscreen | 🔶 Built, unverified |  | `Sources/Isola/Support/Fullscreen.swift:59` | Accepts the full frame or the frame minus the notch inset (self-checked); no notched display on the test Mac. |
 | 94 | Added option to hide now playing widget instantly | ✅ Done |  | `lockscreen.hideInstantly; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:149-154` | Skips the 10 s grace period when hiding an inactive card. |
-| 95 | Added option to silence update prompt | ✅ Done | ✓ | `Sources/Isola/Modules/Settings/License.swift:199,257,266,360` | Daily check of releases.json, island notification, "Silence update prompt". Feed not published yet, so "Couldn't check" for now. |
+| 95 | Added option to silence update prompt | ✅ Done | ✓ | `Sources/Isola/Modules/Settings/License.swift:654,774,842,858` | Daily check of the site's releases.json, island prompt, Silence update prompt. Seen live on 1.4.8: a 1.4.7 copy found 1.4.8 in the production feed, Update Now… downloaded it and checked its SHA-256 and Ed25519 signature, Restart Isola… swapped it in place and relaunched. |
 | 96 | Added option to hide note symbol | ✅ Done |  | `media.hideNoteSymbol; Sources/Isola/Modules/Media/MediaViews.swift:134` | Hides the ♪/mic glyph in the quick-peek marquee. |
 | 97 | Added Apple displays as supported outputs | ✅ Done |  | `Sources/Isola/Modules/HUD/HUDModule.swift:74` | Outputs whose name contains "display" (Studio Display, UltraFine) get the display glyph, in the player and the HUD. |
 | 98 | Added weather widget | ✅ Done | ✓ | `lockscreen.showWeather, weather.city; Sources/Isola/Modules/Calendar/Weather.swift:25-33,56-70; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:398-408` | Open-Meteo current conditions; needs a city or location set in settings. |
@@ -166,8 +166,8 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 120 | Added ability to disable sync for HUDs | ✅ Done |  | `Sources/Isola/Modules/HUD/HUDModule.swift:36,206; Sources/Isola/Modules/HUD/HUDViews.swift:124` | "Show the HUD for changes made elsewhere", on by default. Disabled unless "Replace the macOS HUD" is on. |
 | 121 | Added battery support for AirPods Max | ✅ Done |  | `Sources/Isola/Modules/System/Bluetooth.swift:142-150` | Private IOBluetooth battery keys plus system_profiler fallback cover single-cell AirPods Max. |
 | 122 | Added Bluetooth step to onboarding | ✅ Done | ✓ | `Sources/Isola/Modules/Settings/Onboarding.swift:116` | Bluetooth row triggers the system prompt; seen live: after Allow, the monitor starts without freezing and tracks real devices. |
-| 123 | Added glow option to display HUD | ✅ Done |  | `Sources/Isola/Modules/HUD/HUDViews.swift:24-25; hud.glow` | Amber glow on the brightness HUD; that HUD needs the Replace-HUD toggle plus Accessibility. |
-| 124 | Added decibel option to sound HUD | ✅ Done |  | `Sources/Isola/Modules/HUD/HUDControls.swift:44-50; hud.style` | Uses the device's scalar-to-dB property, falling back to an approximated curve. |
+| 123 | Added glow option to display HUD | ✅ Done | ✓ | `Sources/Isola/Modules/HUD/HUDViews.swift:13; Sources/Isola/Modules/HUD/HUDModule.swift:9` | Glow is a progress style of the display HUD's own look (upgraded installs keep their old glow). Seen live: amber glow at 70%. |
+| 124 | Added decibel option to sound HUD | ✅ Done |  | `Sources/Isola/Modules/HUD/HUDControls.swift:44-50; Sources/Isola/Modules/HUD/HUDModule.swift:9` | Decibels progress style on the sound HUD's look; the device's scalar-to-dB property, else an approximated curve. |
 | 125 | Added swipe to skip while expanded | ✅ Done |  | `Sources/Isola/Modules/Media/MediaModule.swift:145-152` | Media onSwipe skips next/previous on horizontal swipes in any state, including expanded. |
 | 126 | Added menu bar items (controls) | ✅ Done |  | `Sources/Isola/Modules/Settings/SettingsModule.swift:42` | Status menu adds Previous Track, Shuffle ✓ and Repeat One/All ✓, routed through NowPlayingState.shared.commands. |
 | 127 | Added low battery sound | ✅ Done |  | `Sources/Isola/Modules/System/Power.swift:76-81; system.lowBatterySound` | IOKit power-source events; Funk plays at the chosen threshold and again at 10%. |
@@ -213,9 +213,9 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 
 | # | Feature | Status | Seen live | Evidence | Note |
 |---|---|---|---|---|---|
-| 160 | Added percentage option to HUD | ✅ Done | ✓ | `Sources/Isola/Modules/HUD/HUDViews.swift:60-62; hud.style` | Percentage text in the value wing for volume and brightness. |
+| 160 | Added percentage option to HUD | ✅ Done | ✓ | `Sources/Isola/Modules/HUD/HUDModule.swift:131; Sources/Isola/Modules/HUD/HUDViews.swift` | Per-HUD Show percentage, on by default; off, the wing shows a compact bar. Seen live: 50%, muted grey 30% with Muted. |
 | 161 | Added additional device symbols to volume HUD | ✅ Done | ✓ | `Sources/Isola/Modules/HUD/HUDModule.swift:66-81` | AirPods/Pro/Max/4, Beats, EarPods, HomePod, AirPlay, HDMI/DP and headphone jack from CoreAudio. |
 | 162 | Added ability to fine tune notch height | ✅ Done |  | `Sources/Isola/Island/Geometry.swift:17,19; heightTweak` | Plus/minus 8 pt height slider under General, Fine tuning. |
 | 163 | Added AirPods 4 connectivity support | ✅ Done |  | `Sources/Isola/Modules/System/Bluetooth.swift:180-181` | AirPods 4, with and without ANC, by product ID; airpods.gen4 falling back to gen3 or airpods. |
-| 164 | Added option to hide labels on HUD | ✅ Done |  | `Sources/Isola/Modules/HUD/HUDModule.swift:166; hud.showLabels` | Label row under the notch only when enabled; otherwise the value wing shows the bar. |
+| 164 | Added option to hide labels on HUD | ✅ Done |  | `Sources/Isola/Modules/HUD/HUDModule.swift:132` | Per-HUD labels row (Volume, Brightness, Muted) under the notch; off, the wing carries the level. |
 | 165 | Added option to disable spectrogram | ✅ Done |  | `Sources/Isola/Modules/Media/MediaViews.swift:114-122; media.spectrogram` | Toggle swaps the spectrogram for a play/pause glyph. |
