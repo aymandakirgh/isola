@@ -165,6 +165,9 @@ final class MediaController {
     private var idleTimer: Timer?
     /// The play → pause edge; "Keep after pausing" counts from here.
     private var pausedAt: Date?
+    /// "Hide while the playing app is in front" sent the activity away, or kept a playing track's from starting: paused,
+    /// it comes back within "Keep after pausing", whichever track the player moved on to meanwhile.
+    private var hidden = false
     private var lastTrackKey = ""
     private var lastSnapshot: NowPlayingSnapshot?
     private var artworkID = ""
@@ -273,6 +276,7 @@ final class MediaController {
         guard state.hasTrack || Island.shared.isRunning("media") else { return }
         idleTimer?.invalidate()
         pausedAt = nil
+        hidden = false
         lastTrackKey = ""
         state.isPlaying = false
         state.title = ""
@@ -288,10 +292,7 @@ final class MediaController {
     private func updateActivity(peek: Bool, wasPlaying: Bool) {
         let island = Island.shared
         if state.isPlaying { pausedAt = nil } else if wasPlaying { pausedAt = Date() }
-        if sourceInFront {
-            idleTimer?.invalidate()
-            return island.end("media")
-        }
+        if sourceInFront { return hide() }
         if state.isPlaying {
             idleTimer?.invalidate()
             if !island.isRunning("media") || peek { island.start(MediaActivity.item(state: .shared, ui: .shared)) }
@@ -299,6 +300,8 @@ final class MediaController {
             if peek, prefs.peekOnChange, island.current?.id == "media" { island.quickPeek(true, for: prefs.peekDuration) }
             return
         }
+        // A track skipped while paused renews the item too: a swipe-up records its content key.
+        if peek, island.isRunning("media") { island.update(MediaActivity.item(state: .shared, ui: .shared)) }
         // Polls repeat the paused state every second; only the play → pause edge arms the timer.
         guard wasPlaying, island.isRunning("media") else { return }
         linger()
@@ -325,24 +328,40 @@ final class MediaController {
 
     /// "Hide while the playing app is in front": its own window already shows what plays.
     var sourceInFront: Bool {
-        guard MediaPreferences.shared.hideWhileSourceActive, let id = state.sourceBundleID else { return false }
-        return (simulatedFront ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier) == id
+        MediaPreferences.shared.hideWhileSourceActive
+            && Self.hides(state, on: .shared, front: simulatedFront ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
     }
 
-    /// Another app came forward (or the setting changed): the activity leaves for its player, or comes back,
-    /// without a peek, as it would have stayed: playing, or paused within "Keep after pausing".
+    /// The app that plays is in front, and the activity isn't swiped away for this track (until the next one): out of
+    /// sight already, ending it would forget the swipe, and switching away would bring it back.
+    static func hides(_ state: NowPlayingState, on island: Island, front: String?) -> Bool {
+        state.sourceBundleID != nil && state.sourceBundleID == front && island.dismissed["media"] != MediaActivity.contentKey(state)
+    }
+
+    /// The activity leaves for its player; `hidden` brings it back once another app is in front. A playing track counts
+    /// even when it never showed (started or resumed in the player, or the next one): only the hide keeps it away.
+    private func hide() {
+        idleTimer?.invalidate()
+        if Island.shared.isRunning("media") || state.isPlaying { hidden = true }
+        Island.shared.end("media")
+    }
+
+    /// Another app came forward (or the setting changed): the activity leaves for its player, or comes back without a peek.
     func frontChanged() {
         let island = Island.shared
         guard state.hasTrack else { return }
-        if sourceInFront {
-            idleTimer?.invalidate()
-            return island.end("media")
-        }
+        if sourceInFront { return hide() }
+        defer { hidden = false }
         guard !island.isRunning("media"),
-              state.isPlaying || Self.lingerLeft(idle: MediaPreferences.shared.idleSeconds, pausedAt: pausedAt) > 0 else { return }
+              Self.comesBack(playing: state.isPlaying, hidden: hidden,
+                             lingerLeft: Self.lingerLeft(idle: MediaPreferences.shared.idleSeconds, pausedAt: pausedAt)) else { return }
         island.start(MediaActivity.item(state: .shared, ui: .shared))
         if !state.isPlaying { linger() }
     }
+
+    /// Back from behind its player as it would have stayed: playing, or a pause the hide sent away still within "Keep after
+    /// pausing". A pause that ran out stays gone, also once the setting grows; so does one the hide never sent away.
+    static func comesBack(playing: Bool, hidden: Bool, lingerLeft: TimeInterval) -> Bool { playing || hidden && lingerLeft > 0 }
 }
 
 /// The "media" live activity: artwork | spectrogram, marquee peek, full player.
@@ -358,7 +377,7 @@ enum MediaActivity {
         .expanded(size: CGSize(width: 420, height: 162)) { ExpandedPlayer(state: state, ui: ui) }
         .onOptionTap { state.commands.togglePlay() }
         .inactive { !state.isPlaying }
-        .contentKey("\(state.title)\u{1f}\(state.artist)")
+        .contentKey(contentKey(state))
         .onSwipe { direction in
             switch direction {
             case .right: state.commands.next()
@@ -370,6 +389,9 @@ enum MediaActivity {
         // Built as it opens, so it shows that moment's state.
         .contextMenu { currentEntries(state) }
     }
+
+    /// What a swipe-up waits on: the next track brings the activity back.
+    static func contentKey(_ s: NowPlayingState) -> String { "\(s.title)\u{1f}\(s.artist)" }
 
     /// The entries with the live app name, speed support and Media › Source.
     static func currentEntries(_ s: NowPlayingState) -> [MenuEntry] {
@@ -535,6 +557,24 @@ enum MediaModule {
         precondition(MediaController.lingerLeft(idle: -1, pausedAt: t0, now: t0.addingTimeInterval(1e6)) == .infinity, "linger: until playback stops")
         precondition(MediaController.lingerLeft(idle: 0, pausedAt: t0) == 0 && MediaController.lingerLeft(idle: 120, pausedAt: nil) == 0, "linger: off, or never paused")
 
+        // Hide while the playing app is in front: only for that app, and it leaves a track swiped away be (ending the activity
+        // would forget the swipe, and switching away from the player would bring the track back); the next track hides as usual.
+        let island = Island()
+        let swiped = SimulatedPlayer.sampleState(index: 2, playing: true)
+        island.start(MediaActivity.item(state: swiped, ui: MediaUI()))
+        precondition(MediaController.hides(swiped, on: island, front: "com.apple.Music") && !MediaController.hides(swiped, on: island, front: "com.apple.Safari"),
+                     "hide: for the player only")
+        island.dismiss("media")
+        precondition(!MediaController.hides(swiped, on: island, front: "com.apple.Music") && island.current == nil, "hide: a swiped-away track stays so")
+        swiped.title = "Another Song"
+        precondition(MediaController.hides(swiped, on: island, front: "com.apple.Music"), "hide: the next track is hidden like any other")
+        // Once another app is in front: playing comes back, and so does a pause the hide sent away, until "Keep after pausing"
+        // runs out; a pause it never sent away (one that ran out, with the setting grown since) stays gone.
+        precondition(MediaController.comesBack(playing: true, hidden: false, lingerLeft: 0)
+            && MediaController.comesBack(playing: false, hidden: true, lingerLeft: 30), "hide: back after the player")
+        precondition(!MediaController.comesBack(playing: false, hidden: true, lingerLeft: 0)
+            && !MediaController.comesBack(playing: false, hidden: false, lingerLeft: 30), "hide: a spent pause stays gone")
+
         // Colour: the gradient keeps both artwork colours; the others paint with one.
         let red = NSColor(srgbRed: 0.9, green: 0.2, blue: 0.2, alpha: 1), blue = NSColor(srgbRed: 0.2, green: 0.3, blue: 0.8, alpha: 1)
         func rgb(_ c: NSColor) -> [CGFloat] { let s = c.usingColorSpace(.sRGB) ?? c; return [s.redComponent, s.greenComponent, s.blueComponent] }
@@ -643,7 +683,7 @@ enum MediaModule {
                 .background(Color.black)
         }
         // Entries named "*settings" are snapshotted through a hosting view by the core gallery.
-        Gallery.add("media-settings", size: CGSize(width: 520, height: 1650)) {
+        Gallery.add("media-settings", size: CGSize(width: 520, height: 1680)) {
             MediaSettingsView().background(Color(nsColor: .windowBackgroundColor))
         }
 

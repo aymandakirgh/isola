@@ -13,8 +13,9 @@ final class AudioLevels {
     private(set) var bands: [Float] = [0, 0, 0, 0]
     /// True once real (non-zero) audio has arrived; a denied tap only ever delivers zeros.
     private(set) var live = false
-    /// What the last runs of the tap heard: nil before any, true once real audio came through, false after
-    /// `grace` seconds of playback with only silence (System Audio Recording is off for Isola). Kept across pauses.
+    /// What the runs of the tap heard: nil before any, true once real audio came through (and from then on), false
+    /// after `grace` seconds of playback with only silence and nothing heard before: System Audio Recording may be off
+    /// for Isola, or this Mac played nothing (Spotify Connect, a muted video). Kept across pauses.
     private(set) var heard: Bool?
 
     @ObservationIgnored private var tapID = AudioObjectID(kAudioObjectUnknown)
@@ -23,7 +24,7 @@ final class AudioLevels {
     @ObservationIgnored private let analyzer = BandAnalyzer()
     @ObservationIgnored private var startedAt = Date.distantPast
 
-    /// ponytail: a fixed 5 s; a track that opens with longer silence reads as "no access" until its audio starts.
+    /// ponytail: a fixed 5 s; a track that opens with longer silence reads as "nothing heard" until its audio starts.
     static let grace: TimeInterval = 5
     static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture")!
 
@@ -62,12 +63,12 @@ final class AudioLevels {
         }
         guard status == noErr, let proc, AudioDeviceStart(aggregateID, proc) == noErr else { procID = proc; return stop() }
         procID = proc
-        // The tap only runs while something plays: still silent after the grace period, it can't hear.
+        // The tap only runs while something plays: still silent after the grace period, it heard nothing (yet).
         let started = Date()
         startedAt = started
         Task {
             try? await Task.sleep(for: .seconds(Self.grace))
-            if running, startedAt == started, !live { heard = false }
+            if running, startedAt == started, !live, heard != true { heard = false }
         }
     }
 
