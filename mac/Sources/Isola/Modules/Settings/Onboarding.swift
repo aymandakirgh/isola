@@ -262,7 +262,7 @@ struct OnboardingView: View {
             VStack(spacing: 6) {
                 Text("Welcome to Isola").font(.system(size: 30, weight: .bold))
                 Text("Dynamic Island, now for your Mac.").font(.title3).foregroundStyle(.secondary)
-                Text("Notifications, alerts and live activities, right in your notch.").foregroundStyle(.secondary).padding(.top, 2)
+                Text("The notch keeps you posted, from alerts to live activities.").foregroundStyle(.secondary).padding(.top, 2)
             }
             HStack(alignment: .top, spacing: 14) {
                 tip("hand.point.up.left.fill", "Hover to peek")
@@ -369,7 +369,7 @@ struct OnboardingView: View {
                 if model.showKey { keyField }
                 VStack(spacing: 3) {
                     Group {
-                        Text("Activate on up to \(License.deviceLimit) Macs.")
+                        Text("One license covers \(License.deviceLimit) Macs.")
                         Text("The trial lasts 72 hours.")
                     }
                     .foregroundStyle(.secondary)
