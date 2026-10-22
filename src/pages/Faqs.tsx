@@ -70,8 +70,12 @@ export default function Faqs() {
             </AccordionItem>
             <AccordionItem title="How do I hide the menu bar icon?" name="icon">
               <p>
-                From macOS Tahoe onward you can switch it off in System Settings
-                › Menu Bar. {BRAND} keeps working in the background.
+                Turn on Hide menu bar icon in Settings › General. {BRAND} keeps
+                working in the background.
+              </p>
+              <p className={DIM}>
+                To get Settings back, open {BRAND} again from Finder or
+                Spotlight.
               </p>
             </AccordionItem>
             <AccordionItem
