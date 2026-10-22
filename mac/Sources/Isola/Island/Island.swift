@@ -21,6 +21,7 @@ final class Island {
     var suppressed: Set<CGDirectDisplayID> = []
 
     @ObservationIgnored private var transientTimer: Timer?
+    @ObservationIgnored private var transientAnimation: Animation?
     @ObservationIgnored private var peekTimer: Timer?
     @ObservationIgnored private var hoverExpandTimer: Timer?
     @ObservationIgnored private var restoreTimer: Timer?
@@ -139,13 +140,15 @@ final class Island {
 
     // MARK: - Transients (notifications and HUDs)
 
-    func post(_ item: IslandItem, duration: TimeInterval? = nil) {
+    /// `animation` springs a HUD in and out at its own speed (HUDs › Motion); nil uses the island's.
+    func post(_ item: IslandItem, duration: TimeInterval? = nil, animation: Animation? = nil) {
         let seconds = duration ?? Preferences.shared.notificationDuration
         transientTimer?.invalidate()
+        transientAnimation = animation
         if transient?.id == item.id {
             transient = item  // same notification/HUD again: refresh content, extend timer
         } else {
-            withAnimation(Springs.expand) { transient = item }
+            withAnimation(animation ?? Springs.expand) { transient = item }
         }
         transientTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { _ in
             MainActor.assumeIsolated { Island.shared.dismissTransient() }
@@ -155,7 +158,7 @@ final class Island {
     func dismissTransient() {
         transientTimer?.invalidate()
         guard transient != nil else { return }
-        withAnimation(Springs.collapseNotification) {
+        withAnimation(transientAnimation ?? Springs.collapseNotification) {
             transient = nil
             if sortedActivities.isEmpty { peeking = false }
         }

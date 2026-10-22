@@ -214,8 +214,8 @@ struct PermissionRow: View {
     }
 
     private var status: PermissionStatus {
-        // The gallery shows a first run rather than probing this machine.
-        if SystemModule.renderingGallery { return (permission as? Permission).map { $0 == .focus ? .notDetermined : .denied } ?? .notDetermined }
+        // The gallery shows a first run rather than probing this machine (Full Disk Access is never asked for).
+        if SystemModule.renderingGallery { return (permission as? Permission) == .fullDiskAccess ? .denied : .notDetermined }
         let status = permission.status()
         // Accessibility never reads as denied, and macOS asks only once: after that it's System Settings.
         if status == .notDetermined, let key = askedKey, UserDefaults.standard.bool(forKey: key) { return .denied }
