@@ -209,11 +209,12 @@ enum MenuEntry {
         .joined(separator: " | ")
     }
 
-    /// Runs the action titled `title`, alternates and submenus included.
+    /// Runs the action titled `title` (a trailing "…" may be left out), alternates and submenus included.
     @MainActor static func run(_ title: String, in entries: [MenuEntry]) {
+        let wanted = title.replacingOccurrences(of: "…", with: "")
         for entry in entries {
             switch entry {
-            case let .action(t, _, _, _, _, action) where t == title: return action()
+            case let .action(t, _, _, _, _, action) where t.replacingOccurrences(of: "…", with: "") == wanted: return action()
             case let .submenu(_, _, children): run(title, in: children)
             default: continue
             }
