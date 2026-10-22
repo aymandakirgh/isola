@@ -13,11 +13,22 @@ final class AudioLevels {
     private(set) var bands: [Float] = [0, 0, 0, 0]
     /// True once real (non-zero) audio has arrived; a denied tap only ever delivers zeros.
     private(set) var live = false
+    /// What the last runs of the tap heard: nil before any, true once real audio came through, false after
+    /// `grace` seconds of playback with only silence (System Audio Recording is off for Isola). Kept across pauses.
+    private(set) var heard: Bool?
 
     @ObservationIgnored private var tapID = AudioObjectID(kAudioObjectUnknown)
     @ObservationIgnored private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     @ObservationIgnored private var procID: AudioDeviceIOProcID?
     @ObservationIgnored private let analyzer = BandAnalyzer()
+    @ObservationIgnored private var startedAt = Date.distantPast
+
+    /// ponytail: a fixed 5 s; a track that opens with longer silence reads as "no access" until its audio starts.
+    static let grace: TimeInterval = 5
+    static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture")!
+
+    /// `heard` given: a stand-in for the gallery (the tap never starts on its own).
+    init(heard: Bool? = nil) { self.heard = heard }
 
     var running: Bool { procID != nil }
 
@@ -51,6 +62,13 @@ final class AudioLevels {
         }
         guard status == noErr, let proc, AudioDeviceStart(aggregateID, proc) == noErr else { procID = proc; return stop() }
         procID = proc
+        // The tap only runs while something plays: still silent after the grace period, it can't hear.
+        let started = Date()
+        startedAt = started
+        Task {
+            try? await Task.sleep(for: .seconds(Self.grace))
+            if running, startedAt == started, !live { heard = false }
+        }
     }
 
     private func stop() {
@@ -69,7 +87,7 @@ final class AudioLevels {
 
     private func publish(_ levels: BandAnalyzer.Levels) {
         guard running else { return }
-        if levels.peak > 0 { live = true }
+        if levels.peak > 0, !live { live = true; heard = true }
         // Fast attack, slow release, like a VU meter.
         bands = zip(bands, levels.bands).map { old, new in new > old ? old + (new - old) * 0.6 : old + (new - old) * 0.18 }
     }

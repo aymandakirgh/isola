@@ -5,6 +5,9 @@ import SwiftUI
 
 private let store = UserDefaults.standard
 private func load<T>(_ key: String, _ fallback: T) -> T { store.object(forKey: key) as? T ?? fallback }
+private func loadRaw<T: RawRepresentable>(_ key: String, _ fallback: T) -> T where T.RawValue == String {
+    store.string(forKey: key).flatMap(T.init(rawValue:)) ?? fallback
+}
 
 /// Media settings (persisted under `media.*`).
 @MainActor @Observable
@@ -36,6 +39,31 @@ final class MediaPreferences {
     var showTotalTime: Bool = load("media.showTotalTime", false) { didSet { store.set(showTotalTime, forKey: "media.showTotalTime") } }
     /// The volume row stays open when the player collapses and reopens.
     var keepVolumeOpen: Bool = load("media.keepVolumeOpen", false) { didSet { store.set(keepVolumeOpen, forKey: "media.keepVolumeOpen") } }
+    /// The wing artwork card-flips when the track changes.
+    var artworkFlip: Bool = load("media.artworkFlip", true) { didSet { store.set(artworkFlip, forKey: "media.artworkFlip") } }
+    /// What the spectrogram, the gradient progress bar and the Colored outline are painted with.
+    var colorStyle: MediaColorStyle = loadRaw("media.colorStyle", .gradient) {
+        didSet { store.set(colorStyle.rawValue, forKey: "media.colorStyle"); MediaController.shared.restyle() }
+    }
+    /// The player's title badge, and the controls at the ends of its transport row (never the same one twice).
+    var titleBadge: TitleBadge = loadRaw("media.titleBadge", .explicit) { didSet { store.set(titleBadge.rawValue, forKey: "media.titleBadge") } }
+    var leftControl: PlayerControl = loadRaw("media.leftControl", .shuffle) {
+        didSet { store.set(leftControl.rawValue, forKey: "media.leftControl"); if rightControl == leftControl { rightControl = oldValue } }
+    }
+    var rightControl: PlayerControl = loadRaw("media.rightControl", .repeat) {
+        didSet { store.set(rightControl.rawValue, forKey: "media.rightControl"); if leftControl == rightControl { leftControl = oldValue } }
+    }
+    /// The title quick-peeks for `peekDuration` seconds when the track changes or playback resumes.
+    var peekOnChange: Bool = load("media.peekOnChange", true) { didSet { store.set(peekOnChange, forKey: "media.peekOnChange") } }
+    var peekDuration: Double = load("media.peekDuration", 2) { didSet { store.set(peekDuration, forKey: "media.peekDuration") } }
+    /// The activity steps aside while the app that plays is in front, and comes back when it isn't.
+    var hideWhileSourceActive: Bool = load("media.hideWhileSourceActive", false) {
+        didSet { store.set(hideWhileSourceActive, forKey: "media.hideWhileSourceActive"); MediaController.shared.frontChanged() }
+    }
+    /// Where now-playing info comes from. This Mac's own choice (not synced): a player asks it for Automation.
+    var source: MediaSourceChoice = loadRaw("media.source", .automatic) {
+        didSet { store.set(source.rawValue, forKey: "media.source"); NowPlayingSources.shared.sourceChosen() }
+    }
 
     /// The wing shows this Focus instead of the spectrogram.
     func showsFocus(_ focus: FocusState) -> Bool {
@@ -62,6 +90,15 @@ final class MediaPreferences {
         case "gradientProgress": gradientProgress = on
         case "showTotalTime": showTotalTime = on
         case "keepVolumeOpen": keepVolumeOpen = on
+        case "artworkFlip": artworkFlip = on
+        case "colorStyle": colorStyle = MediaColorStyle(rawValue: value) ?? .gradient
+        case "titleBadge": titleBadge = TitleBadge(rawValue: value) ?? .explicit
+        case "leftControl": leftControl = PlayerControl(rawValue: value) ?? .shuffle
+        case "rightControl": rightControl = PlayerControl(rawValue: value) ?? .repeat
+        case "peekOnChange": peekOnChange = on
+        case "peekDuration": peekDuration = Double(value) ?? 2
+        case "hideWhileSourceActive": hideWhileSourceActive = on
+        case "source": source = MediaSourceChoice(rawValue: value) ?? .automatic
         default: NSLog("isola: unknown media pref %@", key)
         }
     }
@@ -87,6 +124,8 @@ final class MediaUI {
     var glarePoint: UnitPoint?
     /// One line in place of the progress bar for a few seconds (a Spotify command was refused).
     var notice: String?
+    /// Offscreen gallery: Media › Player choices pinned for one shot, instead of the settings.
+    var layout: PlayerLayout?
 
     func show(notice text: String) {
         notice = text
@@ -124,13 +163,19 @@ final class MediaController {
 
     private let state = NowPlayingState.shared
     private var idleTimer: Timer?
+    /// The play → pause edge; "Keep after pausing" counts from here.
+    private var pausedAt: Date?
     private var lastTrackKey = ""
     private var lastSnapshot: NowPlayingSnapshot?
     private var artworkID = ""
+    /// The artwork's two dominant colours; `state.colors` has them as Media › Island › Colour paints them.
+    private var artworkColors = NowPlayingState.shared.colors
     /// `isolactl media.play app=<bundle id>`: the simulated track claims that app (e.g. com.apple.podcasts);
     /// `episode=1` makes it a podcast episode, as Spotify's Web API reports one.
     var simulatedApp: String?
     var simulatedEpisode = false
+    /// `isolactl media.front app=<bundle id>`: that app counts as the frontmost one (`app=-`: the real one again).
+    var simulatedFront: String?
 
     private static let browsers: Set<String> = [
         "com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox", "com.microsoft.edgemac", "company.thebrowser.Browser",
@@ -156,7 +201,7 @@ final class MediaController {
         title.isEmpty ? (app ?? "Now Playing", artist) : (title, artist.isEmpty ? app ?? "" : artist)
     }
 
-    private static func appName(_ bundleID: String?) -> String? {
+    static func appName(_ bundleID: String?) -> String? {
         guard let id = bundleID else { return nil }
         return NSRunningApplication.runningApplications(withBundleIdentifier: id).first?.localizedName
             ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)?.deletingPathExtension().lastPathComponent
@@ -181,7 +226,10 @@ final class MediaController {
         if s.artworkID != artworkID || (state.artwork == nil && s.artwork != nil) {
             artworkID = s.artworkID
             state.artwork = s.artwork
-            if let art = s.artwork { state.colors = ArtworkColors.dominant(art) }
+            if let art = s.artwork {
+                artworkColors = ArtworkColors.dominant(art)
+                restyle()
+            }
         }
         state.isPlaying = s.isPlaying
         state.duration = s.duration
@@ -204,10 +252,15 @@ final class MediaController {
         state.canCopyLink = s.link != nil || s.canFetchLink
         MediaUI.shared.link = s.link
 
-        if trackChanged { withAnimation(.easeInOut(duration: 0.5)) { MediaUI.shared.flipped.toggle() } }
+        if trackChanged, MediaPreferences.shared.artworkFlip { withAnimation(.easeInOut(duration: 0.5)) { MediaUI.shared.flipped.toggle() } }
         lastTrackKey = key
         updateActivity(peek: trackChanged || resumed, wasPlaying: wasPlaying)
         syncLevels()
+    }
+
+    /// The artwork colours as Media › Island › Colour paints them.
+    func restyle() {
+        state.colors = MediaPreferences.shared.colorStyle.paint(artworkColors)
     }
 
     /// The audio tap only runs while it has something to draw (polls re-check a Focus that took the wing).
@@ -219,6 +272,7 @@ final class MediaController {
     private func clear() {
         guard state.hasTrack || Island.shared.isRunning("media") else { return }
         idleTimer?.invalidate()
+        pausedAt = nil
         lastTrackKey = ""
         state.isPlaying = false
         state.title = ""
@@ -233,22 +287,61 @@ final class MediaController {
 
     private func updateActivity(peek: Bool, wasPlaying: Bool) {
         let island = Island.shared
+        if state.isPlaying { pausedAt = nil } else if wasPlaying { pausedAt = Date() }
+        if sourceInFront {
+            idleTimer?.invalidate()
+            return island.end("media")
+        }
         if state.isPlaying {
             idleTimer?.invalidate()
             if !island.isRunning("media") || peek { island.start(MediaActivity.item(state: .shared, ui: .shared)) }
-            if peek, island.current?.id == "media" { island.quickPeek(true, for: 2) }
+            let prefs = MediaPreferences.shared
+            if peek, prefs.peekOnChange, island.current?.id == "media" { island.quickPeek(true, for: prefs.peekDuration) }
             return
         }
         // Polls repeat the paused state every second; only the play → pause edge arms the timer.
         guard wasPlaying, island.isRunning("media") else { return }
-        let idle = MediaPreferences.shared.idleSeconds
-        if idle == 0 { return island.end("media") }
-        if idle < 0 { return }
-        idleTimer = Timer.scheduledTimer(withTimeInterval: idle, repeats: false) { _ in
+        linger()
+    }
+
+    /// Ends the paused activity once "Keep after pausing" runs out, counted from the pause.
+    private func linger() {
+        idleTimer?.invalidate()
+        let left = Self.lingerLeft(idle: MediaPreferences.shared.idleSeconds, pausedAt: pausedAt)
+        if left <= 0 { return Island.shared.end("media") }
+        guard left.isFinite else { return }
+        idleTimer = Timer.scheduledTimer(withTimeInterval: left, repeats: false) { _ in
             MainActor.assumeIsolated {
                 if !NowPlayingState.shared.isPlaying { Island.shared.end("media") }
             }
         }
+    }
+
+    /// Seconds a paused activity has left under "Keep after pausing": infinity until the source stops, 0 once gone.
+    static func lingerLeft(idle: Double, pausedAt: Date?, now: Date = Date()) -> TimeInterval {
+        guard let pausedAt, idle != 0 else { return 0 }
+        return idle < 0 ? .infinity : max(0, idle - now.timeIntervalSince(pausedAt))
+    }
+
+    /// "Hide while the playing app is in front": its own window already shows what plays.
+    var sourceInFront: Bool {
+        guard MediaPreferences.shared.hideWhileSourceActive, let id = state.sourceBundleID else { return false }
+        return (simulatedFront ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier) == id
+    }
+
+    /// Another app came forward (or the setting changed): the activity leaves for its player, or comes back,
+    /// without a peek, as it would have stayed: playing, or paused within "Keep after pausing".
+    func frontChanged() {
+        let island = Island.shared
+        guard state.hasTrack else { return }
+        if sourceInFront {
+            idleTimer?.invalidate()
+            return island.end("media")
+        }
+        guard !island.isRunning("media"),
+              state.isPlaying || Self.lingerLeft(idle: MediaPreferences.shared.idleSeconds, pausedAt: pausedAt) > 0 else { return }
+        island.start(MediaActivity.item(state: .shared, ui: .shared))
+        if !state.isPlaying { linger() }
     }
 }
 
@@ -274,6 +367,66 @@ enum MediaActivity {
             }
             return true
         }
+        // Built as it opens, so it shows that moment's state.
+        .contextMenu { currentEntries(state) }
+    }
+
+    /// The entries with the live app name, speed support and Media › Source.
+    static func currentEntries(_ s: NowPlayingState) -> [MenuEntry] {
+        entries(s, app: MediaController.appName(s.sourceBundleID), speed: SpeedMenu.available, source: MediaPreferences.shared.source)
+    }
+
+    /// Right-click on the activity: play or pause, skip (within the episode for podcasts), the link,
+    /// the player app, playback speed where the source takes it, and Media › Source.
+    static func entries(_ s: NowPlayingState, app: String?, speed: Bool, source: MediaSourceChoice) -> [MenuEntry] {
+        let commands = s.commands
+        var list: [MenuEntry] = [.action(s.isPlaying ? "Pause" : "Play", symbol: s.isPlaying ? "pause.fill" : "play.fill") { commands.togglePlay() }]
+        list += s.skipsWithinEpisode
+            ? [.action("Forward 30 Seconds", symbol: "goforward.30") { s.seek(to: s.currentElapsed() + 30) },
+               .action("Back 15 Seconds", symbol: "gobackward.15") { s.seek(to: s.currentElapsed() - 15) }]
+            : [.action("Next Track", symbol: "forward.fill") { commands.next() },
+               .action("Previous Track", symbol: "backward.fill") { commands.previous() }]
+        list.append(.separator)
+        if s.canCopyLink { list.append(.action("Copy Link", symbol: "link") { commands.copyLink { _ in } }) }
+        if let app { list.append(.action("Show in \(app)", symbol: "arrow.up.forward.app") { commands.openSource() }) }
+        if speed {
+            list.append(.submenu("Speed", symbol: "gauge.with.dots.needle.67percent", SpeedMenu.rates.map { rate in
+                .action(SpeedMenu.label(rate), checked: s.rate == rate) { s.setRate(rate) }
+            }))
+        }
+        list.append(.submenu("Source", symbol: "dot.radiowaves.left.and.right", MediaSourceChoice.allCases.map { choice in
+            .action(choice.title, checked: choice == source) { MediaPreferences.shared.source = choice }
+        }))
+        return list
+    }
+
+    /// "Pause | Next Track | … | Speed › [0.5× · ✓1× · …]", for `isolactl media.menu.state` and the self-check.
+    static func describe(_ entries: [MenuEntry]) -> String {
+        entries.map { entry in
+            switch entry {
+            case let .action(title, _, _, checked, _, _): (checked ? "✓" : "") + title
+            case let .submenu(title, _, children): "\(title) › [\(children.map { describe([$0]) }.joined(separator: " · "))]"
+            case let .nowPlaying(title, _): title
+            case .separator: "—"
+            }
+        }.joined(separator: " | ")
+    }
+
+    /// Runs the entry titled `title`, submenus included (`isolactl media.menu pick=<title>`); false if there is none.
+    @discardableResult
+    static func pick(_ title: String, in entries: [MenuEntry]) -> Bool {
+        for entry in entries {
+            switch entry {
+            case let .action(t, _, _, _, _, run) where t == title:
+                run()
+                return true
+            case let .submenu(_, _, children):
+                if pick(title, in: children) { return true }
+            default:
+                continue
+            }
+        }
+        return false
     }
 }
 
@@ -281,7 +434,11 @@ enum MediaActivity {
 enum MediaModule {
     static func start() {
         registerSettings()
+        MediaController.shared.restyle()
         NowPlayingSources.shared.start()
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { MediaController.shared.frontChanged() }
+        }
         registerDebug()
     }
 
@@ -317,9 +474,24 @@ enum MediaModule {
         Debug.on("media.copylink") { _ in NowPlayingState.shared.commands.copyLink { _ in } }  // then: pbpaste
         Debug.on("media.state") { _ in
             let s = NowPlayingState.shared
-            Debug.reply("source=\(NowPlayingSources.shared.source) playing=\(s.isPlaying) title=\(s.title) app=\(s.sourceBundleID ?? "-") "
-                + "canLike=\(s.canLike) liked=\(s.liked) link=\(s.canCopyLink) format=\(s.audioFormat ?? "-") automix=\(s.inTransition) "
-                + "explicit=\(s.isExplicit) repeat=\(s.repeatMode) podcast=\(s.isPodcast) spotify=\(SpotifyWeb.shared.summary)")
+            Debug.reply("source=\(NowPlayingSources.shared.source) chosen=\(MediaPreferences.shared.source.rawValue) playing=\(s.isPlaying) title=\(s.title) "
+                + "app=\(s.sourceBundleID ?? "-") canLike=\(s.canLike) liked=\(s.liked) link=\(s.canCopyLink) format=\(s.audioFormat ?? "-") automix=\(s.inTransition) "
+                + "explicit=\(s.isExplicit) repeat=\(s.repeatMode) podcast=\(s.isPodcast) colors=\(s.colors.count) hiddenForApp=\(MediaController.shared.sourceInFront) "
+                + "spotify=\(SpotifyWeb.shared.summary)")
+        }
+        // Hide while the playing app is in front, without bringing an app forward: app=<bundle id>, or app=- for the real one.
+        Debug.on("media.front") { args in
+            MediaController.shared.simulatedFront = args["app"].flatMap { $0 == "-" ? nil : $0 }
+            MediaController.shared.frontChanged()
+        }
+        // The right-click menu as it would open now; `media.menu pick=<title>` runs one of its entries.
+        Debug.on("media.menu.state") { _ in Debug.reply(MediaActivity.describe(MediaActivity.currentEntries(.shared))) }
+        Debug.on("media.menu") { args in
+            if let title = args["pick"], !MediaActivity.pick(title, in: MediaActivity.currentEntries(.shared)) { NSLog("isola: no media menu entry %@", title) }
+        }
+        Debug.on("media.audio.state") { _ in
+            let levels = AudioLevels.shared
+            Debug.reply("running=\(levels.running) live=\(levels.live) heard=\(levels.heard.map(String.init) ?? "-")")
         }
     }
 
@@ -355,6 +527,56 @@ enum MediaModule {
             }
             precondition(box([1, 1, 1, 1]).height > box([0, 0, 0, 0]).height + 6, "\(style) barely moves")
         }
+
+        // "Keep after pausing" counts from the pause, also for an activity that comes back after its player was in front.
+        let t0 = Date(timeIntervalSinceReferenceDate: 0)
+        precondition(MediaController.lingerLeft(idle: 120, pausedAt: t0, now: t0.addingTimeInterval(30)) == 90, "linger: what's left")
+        precondition(MediaController.lingerLeft(idle: 120, pausedAt: t0, now: t0.addingTimeInterval(200)) == 0, "linger: ran out")
+        precondition(MediaController.lingerLeft(idle: -1, pausedAt: t0, now: t0.addingTimeInterval(1e6)) == .infinity, "linger: until playback stops")
+        precondition(MediaController.lingerLeft(idle: 0, pausedAt: t0) == 0 && MediaController.lingerLeft(idle: 120, pausedAt: nil) == 0, "linger: off, or never paused")
+
+        // Colour: the gradient keeps both artwork colours; the others paint with one.
+        let red = NSColor(srgbRed: 0.9, green: 0.2, blue: 0.2, alpha: 1), blue = NSColor(srgbRed: 0.2, green: 0.3, blue: 0.8, alpha: 1)
+        func rgb(_ c: NSColor) -> [CGFloat] { let s = c.usingColorSpace(.sRGB) ?? c; return [s.redComponent, s.greenComponent, s.blueComponent] }
+        func hsb(_ c: NSColor) -> (sat: CGFloat, bri: CGFloat) {
+            var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            (c.usingColorSpace(.sRGB) ?? c).getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+            return (s, b)
+        }
+        precondition(MediaColorStyle.gradient.paint([red, blue]) == [red, blue], "colour: gradient as is")
+        let mixed = MediaColorStyle.artwork.paint([red, blue])
+        precondition(mixed.count == 1 && zip(rgb(mixed[0]), zip(rgb(red), rgb(blue))).allSatisfy { $0 > min($1.0, $1.1) && $0 < max($1.0, $1.1) },
+                     "colour: artwork mixes the two \(rgb(mixed[0]))")
+        let vivid = MediaColorStyle.colored.paint([red, blue])
+        precondition(vivid.count == 1 && hsb(vivid[0]).bri >= 0.9 && hsb(vivid[0]).sat >= max(0.55, hsb(mixed[0]).sat), "colour: colored is bright and saturated")
+        precondition(hsb(MediaColorStyle.colored.paint([NSColor(white: 0.4, alpha: 1), NSColor(white: 0.5, alpha: 1)])[0]).sat < 0.08, "colour: a grey cover stays grey")
+        precondition(MediaColorStyle.monochrome.paint([red, blue]).map(rgb) == [rgb(NSColor(Palette.ink))], "colour: monochrome is ink")
+
+        // Media › Source narrows what is read; Music's like is a favourite.
+        precondition(MediaSourceChoice.automatic.readsSystem && MediaSourceChoice.automatic.players == ScriptPlayer.allCases
+            && MediaSourceChoice.system.readsSystem && MediaSourceChoice.system.players.isEmpty
+            && !MediaSourceChoice.music.readsSystem && MediaSourceChoice.spotify.players == [.spotify], "source choices")
+        precondition(PlayerControl.like.title(source: "com.apple.Music") == "Favorite" && PlayerControl.like.symbol(source: "com.apple.Music") == "star"
+            && PlayerControl.like.title(source: SpotifyWeb.bundleID) == "Like" && PlayerControl.like.symbol(source: nil) == "heart", "like or favourite")
+
+        // The right-click menu: a song, then a podcast episode (skips within it, no app or speed).
+        let song = SimulatedPlayer.sampleState(index: 0, playing: true)
+        var toggled = false
+        song.commands.togglePlay = { toggled = true }
+        song.canCopyLink = true
+        let songMenu = MediaActivity.entries(song, app: "Music", speed: true, source: .spotify)
+        precondition(MediaActivity.describe(songMenu) == "Pause | Next Track | Previous Track | — | Copy Link | Show in Music | "
+            + "Speed › [0.5× · 0.75× · ✓1× · 1.25× · 1.5× · 2×] | Source › [Automatic · System · Music · ✓Spotify]", "menu: \(MediaActivity.describe(songMenu))")
+        precondition(MediaActivity.pick("Pause", in: songMenu) && toggled, "menu: pause")
+        precondition(MediaActivity.pick("1.5×", in: songMenu) && song.rate == 1.5, "menu: speed, from its submenu")
+        precondition(!MediaActivity.pick("Shuffle", in: songMenu), "menu: no such entry")
+        let episode = SimulatedPlayer.sampleState(index: 1, playing: false)
+        episode.isEpisode = true
+        let episodeMenu = MediaActivity.entries(episode, app: nil, speed: false, source: .automatic)
+        precondition(MediaActivity.describe(episodeMenu) == "Play | Forward 30 Seconds | Back 15 Seconds | — | Source › [✓Automatic · System · Music · Spotify]",
+                     "podcast menu: \(MediaActivity.describe(episodeMenu))")
+        let before = episode.elapsed
+        precondition(MediaActivity.pick("Back 15 Seconds", in: episodeMenu) && abs(episode.elapsed - (before - 15)) < 0.01, "menu: 15 s back")
     }
 
     static func gallery() {
@@ -421,7 +643,7 @@ enum MediaModule {
                 .background(Color.black)
         }
         // Entries named "*settings" are snapshotted through a hosting view by the core gallery.
-        Gallery.add("media-settings", size: CGSize(width: 520, height: 1240)) {
+        Gallery.add("media-settings", size: CGSize(width: 520, height: 1650)) {
             MediaSettingsView().background(Color(nsColor: .windowBackgroundColor))
         }
 
@@ -451,5 +673,64 @@ enum MediaModule {
         let refusedUI = MediaUI()
         (refusedUI.offscreen, refusedUI.notice) = (true, SpotifyWeb.problem((403, Data(#"{"error":{"reason":"PREMIUM_REQUIRED"}}"#.utf8))))
         Gallery.island("media-expanded-spotify-refused", item: MediaActivity.item(state: spotify, ui: refusedUI), expanded: true)
+
+        // Media › Player: the format beside the title; like and copy link at the ends of the row
+        // (Music's favourite star, Spotify's heart, dimmed where the source has neither).
+        let formatUI = MediaUI()
+        (formatUI.offscreen, formatUI.layout) = (true, PlayerLayout(badge: .format))
+        Gallery.island("media-expanded-badge-format", item: MediaActivity.item(state: extras, ui: formatUI), expanded: true)
+        let endsUI = MediaUI()
+        (endsUI.offscreen, endsUI.layout) = (true, PlayerLayout(left: .like, right: .copy))
+        Gallery.island("media-expanded-ends-music", item: MediaActivity.item(state: extras, ui: endsUI), expanded: true)
+        Gallery.island("media-expanded-ends-spotify", item: MediaActivity.item(state: spotify, ui: endsUI), expanded: true)
+        Gallery.island("media-expanded-ends-unavailable", item: MediaActivity.item(state: playing, ui: endsUI), expanded: true)
+
+        // Media › Island › Colour, on the spectrogram (fixed bands) and the gradient progress bar.
+        for style in MediaColorStyle.allCases {
+            let tinted = SimulatedPlayer.sampleState(index: 2, playing: true)
+            tinted.colors = style.paint(tinted.colors)
+            let item = IslandItem(id: "media", kind: .liveActivity) {
+                WingArtwork(state: tinted, ui: ui).padding(.leading, 9)
+            } trailing: {
+                Spectrogram(state: tinted, style: .mirrored, bands: [0.95, 0.75, 0.55, 0.35]).padding(.trailing, 9)
+            }
+            Gallery.island("media-colour-\(style.rawValue)", item: item, geometry: .notchPreview)
+            Gallery.add("media-colour-\(style.rawValue)-progress", size: CGSize(width: 420, height: 48)) {
+                ProgressScrubber(state: tinted, gradient: true, totalTime: true)
+                    .padding(.horizontal, 22)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+            }
+        }
+
+        // The right-click menu, drawn like the status menu: a song, a podcast episode, and the song's submenus.
+        let menuSong = SimulatedPlayer.sampleState(index: 2, playing: true)
+        menuSong.canCopyLink = true
+        let songEntries = MediaActivity.entries(menuSong, app: "Music", speed: true, source: .automatic)
+        let menuEpisode = SimulatedPlayer.sampleState(index: 1, playing: false)
+        menuEpisode.sourceBundleID = "com.apple.podcasts"
+        let submenus = songEntries.compactMap { entry -> (String, [MenuEntry])? in
+            guard case let .submenu(title, _, children) = entry else { return nil }
+            return ("media-menu-\(title.lowercased())", children)
+        }
+        let menus = [("media-menu", songEntries), ("media-menu-podcast", MediaActivity.entries(menuEpisode, app: "Podcasts", speed: true, source: .automatic))] + submenus
+        for (name, entries) in menus {
+            Gallery.add(name, size: CGSize(width: 300, height: CGFloat(entries.count) * 25 + 40), hosted: true) {
+                StatusMenuMock(entries: entries).background(Color(nsColor: .windowBackgroundColor))
+            }
+        }
+
+        // Live waveform's audio access: not checked yet, allowed, and missing (with the way to System Settings).
+        Gallery.add("media-audio-access-settings", size: CGSize(width: 520, height: 230)) {
+            Form {
+                Section("Live waveform") {
+                    AudioAccessRow(levels: AudioLevels())
+                    AudioAccessRow(levels: AudioLevels(heard: true))
+                    AudioAccessRow(levels: AudioLevels(heard: false))
+                }
+            }
+            .formStyle(.grouped)
+            .background(Color(nsColor: .windowBackgroundColor))
+        }
     }
 }

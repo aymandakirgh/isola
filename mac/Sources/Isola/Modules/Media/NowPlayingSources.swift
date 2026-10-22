@@ -31,9 +31,28 @@ struct NowPlayingSnapshot {
     var episode = false
 }
 
+/// Media › Source: where now-playing info comes from.
+enum MediaSourceChoice: String, CaseIterable, Identifiable {
+    /// MediaRemote, then the helper, then Music or Spotify where Automation already allows.
+    case automatic
+    /// MediaRemote and the helper only.
+    case system
+    /// That app alone, through AppleScript.
+    case music, spotify
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var readsSystem: Bool { player == nil }
+    /// The one app it names, if any.
+    var player: ScriptPlayer? { self == .music ? .music : self == .spotify ? .spotify : nil }
+    /// The scriptable players it may read, in order.
+    var players: [ScriptPlayer] { player.map { [$0] } ?? (self == .automatic ? ScriptPlayer.allCases : []) }
+}
+
 /// Polls/receives now-playing info and routes media commands to whichever source is live:
 /// MediaRemote first; AppleScript for Music/Spotify when MediaRemote stays silent
 /// (macOS 15.4+ withholds it from unentitled apps); the simulated player in tests.
+/// Media › Source can narrow that to the system alone, or to one player.
 @MainActor
 final class NowPlayingSources {
     static let shared = NowPlayingSources()
@@ -43,8 +62,10 @@ final class NowPlayingSources {
     private let remote = MediaRemote()
     private var lastScriptPoll = Date.distantPast
     private var scriptPolling = false
-    /// What the snapshots do not carry: Automation consent per app (only ever checked, never asked
-    /// for here) and a like known better than the source says (Music's AppleScript, a fresh click).
+    /// A player just chosen in Media › Source, still to be asked for Automation (once it runs).
+    private var askConsent: ScriptPlayer?
+    /// What the snapshots do not carry: Automation consent per app (only ever checked; the one ask is
+    /// `askConsent`'s) and a like known better than the source says (Music's AppleScript, a fresh click).
     private var last: NowPlayingSnapshot?
     private var trackKey = ""
     private var automation: [String: OSStatus] = [:]
@@ -68,21 +89,43 @@ final class NowPlayingSources {
 
     func poll() {
         if SimulatedPlayer.shared.active { source = .simulated; return }
+        // A player chosen in Media › Source is read on its own: no MediaRemote, no helper.
+        guard MediaPreferences.shared.source.readsSystem else { return received(nil) }
         remote.fetch { snapshot in
             MainActor.assumeIsolated { NowPlayingSources.shared.received(snapshot) }
         }
     }
 
+    /// Media › Source changed: a chosen player is asked for Automation once, then everything is read afresh.
+    func sourceChosen() {
+        askConsent = MediaPreferences.shared.source.player
+        lastScriptPoll = .distantPast
+        poll()
+    }
+
     private func received(_ snapshot: NowPlayingSnapshot?) {
         guard !SimulatedPlayer.shared.active else { return }
-        if let snapshot {
-            source = .mediaRemote
-            return deliver(snapshot)
+        let choice = MediaPreferences.shared.source
+        if choice.readsSystem {
+            if let snapshot {
+                source = .mediaRemote
+                return deliver(snapshot)
+            }
+            // Direct MediaRemote is silent (blocked on macOS 15.4+): use the perl-hosted helper.
+            if let bridged = MediaRemoteBridge.shared.latest {
+                source = .bridge
+                return deliver(bridged)
+            }
         }
-        // Direct MediaRemote is silent (blocked on macOS 15.4+): use the perl-hosted helper.
-        if let bridged = MediaRemoteBridge.shared.latest {
-            source = .bridge
-            return deliver(bridged)
+        let players = choice.players
+        guard !players.isEmpty else {
+            source = .none
+            return deliver(nil)
+        }
+        // Chosen in Media › Source: the one prompt, on the script queue before any status read.
+        if let player = askConsent, player.isRunning {
+            askConsent = nil
+            Scripting.queue.async { _ = Scripting.consent(player.bundleID, ask: true) }
         }
         // Nothing playing, or no helper. Ask the scriptable players, off the main thread and only
         // those Automation already allows: an idle Music or Spotify must not stall the UI or prompt.
@@ -91,7 +134,7 @@ final class NowPlayingSources {
         lastScriptPoll = Date()
         scriptPolling = true
         Scripting.queue.async {
-            let found = ScriptPlayer.allCases.lazy
+            let found = players.lazy
                 .filter { $0.isRunning && Scripting.consent($0.bundleID) == noErr }
                 .compactMap { player in player.snapshot().map { (player, $0) } }
                 .first
@@ -101,8 +144,11 @@ final class NowPlayingSources {
 
     private func scripted(_ found: (ScriptPlayer, NowPlayingSnapshot)?) {
         scriptPolling = false
-        // The helper may have spoken while the script ran; it wins.
-        guard !SimulatedPlayer.shared.active, MediaRemoteBridge.shared.latest == nil else { return }
+        let choice = MediaPreferences.shared.source
+        // The helper may have spoken while the script ran; it wins, unless a player was chosen.
+        guard !SimulatedPlayer.shared.active, !choice.readsSystem || MediaRemoteBridge.shared.latest == nil else { return }
+        // The choice may have changed while the script ran.
+        let found = found.flatMap { choice.players.contains($0.0) ? $0 : nil }
         source = found.map { .script($0.0) } ?? .none
         deliver(found?.1)
     }
@@ -394,11 +440,12 @@ enum Scripting {
         return script?.executeAndReturnError(&error)
     }
 
-    /// Automation consent for an app, never prompting: noErr allowed, errAEEventNotPermitted denied,
-    /// errAEEventWouldRequireUserConsent not asked yet, procNotFound not running. May block: call on `queue`.
-    static func consent(_ bundleID: String) -> OSStatus {
+    /// Automation consent for an app: noErr allowed, errAEEventNotPermitted denied, errAEEventWouldRequireUserConsent
+    /// not asked yet, procNotFound not running. Never prompts unless `ask` (a user's explicit choice), and then only
+    /// if never answered. May block (until the prompt is answered): call on `queue`.
+    static func consent(_ bundleID: String, ask: Bool = false) -> OSStatus {
         let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
-        return AEDeterminePermissionToAutomateTarget(target.aeDesc, AEEventClass(typeWildCard), AEEventID(typeWildCard), false)
+        return AEDeterminePermissionToAutomateTarget(target.aeDesc, AEEventClass(typeWildCard), AEEventID(typeWildCard), ask)
     }
 }
 
@@ -842,6 +889,19 @@ enum ArtworkColors {
             return NSColor(srgbRed: r / n, green: g / n, blue: b / n, alpha: 1)
         }
         return [lift(average(rows: 0..<2), minBrightness: 0.62), lift(average(rows: 2..<4), minBrightness: 0.36)]
+    }
+
+    /// One colour standing for the artwork: its two halves mixed.
+    static func mixed(_ colors: [NSColor]) -> NSColor {
+        guard let first = colors.first else { return .white }
+        return colors.count > 1 ? first.blended(withFraction: 0.5, of: colors[1]) ?? first : first
+    }
+
+    /// Saturated and bright, for the Colored style; a grey stays grey (its hue means nothing).
+    static func vivid(_ color: NSColor) -> NSColor {
+        var hue: CGFloat = 0, sat: CGFloat = 0, bri: CGFloat = 0, alpha: CGFloat = 0
+        (color.usingColorSpace(.sRGB) ?? color).getHue(&hue, saturation: &sat, brightness: &bri, alpha: &alpha)
+        return NSColor(hue: hue, saturation: sat < 0.08 ? sat : min(1, max(0.6, sat * 1.4)), brightness: max(bri, 0.92), alpha: 1)
     }
 
     private static func lift(_ color: NSColor, minBrightness: CGFloat) -> NSColor {

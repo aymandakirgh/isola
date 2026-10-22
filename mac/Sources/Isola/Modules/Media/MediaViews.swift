@@ -132,6 +132,30 @@ enum SpectrogramStyle: String, CaseIterable, Identifiable {
     var title: String { rawValue.capitalized }
 }
 
+/// Media › Island › Colour: what the spectrogram, the gradient progress bar and the Colored outline are painted with.
+enum MediaColorStyle: String, CaseIterable, Identifiable {
+    /// The artwork's two colours, top to bottom (the original look).
+    case gradient
+    /// The artwork's one dominant colour.
+    case artwork
+    /// That colour, saturated and brightened.
+    case colored
+    /// The island's ink.
+    case monochrome
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+
+    func paint(_ artwork: [NSColor]) -> [NSColor] {
+        switch self {
+        case .gradient: artwork
+        case .artwork: [ArtworkColors.mixed(artwork)]
+        case .colored: [ArtworkColors.vivid(ArtworkColors.mixed(artwork))]
+        case .monochrome: [NSColor(Palette.ink)]
+        }
+    }
+}
+
 /// Spectrogram geometry for four band levels (bass → treble, 0...1); all zero is the paused look.
 struct SpectrogramShape: Shape {
     var style: SpectrogramStyle
@@ -394,7 +418,7 @@ private struct SourceAppButton: View {
     }
 }
 
-private struct SpeedMenu: View {
+struct SpeedMenu: View {
     let state: NowPlayingState
     let ui: MediaUI
     static let rates: [Double] = [0.5, 0.75, 1, 1.25, 1.5, 2]
@@ -510,17 +534,21 @@ final class CopyFlash: ObservableObject {
     @Published var copied: Bool?
 }
 
+/// Copy Link; at an end of the transport row it stays, dimmed, while the source has no link.
 private struct CopyLinkButton: View {
     let state: NowPlayingState
+    var size: CGFloat = 12
+    var width: CGFloat = 24
     @StateObject private var flash = CopyFlash()
 
     var body: some View {
-        ControlIcon(symbol: flash.copied.map { $0 ? "checkmark" : "xmark" } ?? "link", size: 12, width: 24) {
+        ControlIcon(symbol: flash.copied.map { $0 ? "checkmark" : "xmark" } ?? "link", on: state.canCopyLink, size: size, width: width) {
             state.commands.copyLink { ok in
                 flash.copied = ok
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { flash.copied = nil }
             }
         }
+        .disabled(!state.canCopyLink)
     }
 }
 
@@ -541,13 +569,78 @@ private struct PlayerArtwork: View {
     }
 }
 
+/// A Music favourite (star), or a like (heart); at an end of the transport row it stays, dimmed, while the source takes none.
 private struct LikeButton: View {
+    let state: NowPlayingState
+    var size: CGFloat = 12
+    var width: CGFloat = 24
+
+    var body: some View {
+        let symbol = PlayerControl.like.symbol(source: state.sourceBundleID)
+        ControlIcon(symbol: state.liked ? symbol + ".fill" : symbol, on: state.canLike, size: size, width: width) { state.commands.toggleLike() }
+            .contentTransition(.symbolEffect(.replace))
+            .disabled(!state.canLike)
+    }
+}
+
+/// One end of the transport row, as Media › Player › Left and Right button choose.
+private struct EndControl: View {
+    let control: PlayerControl
     let state: NowPlayingState
 
     var body: some View {
-        ControlIcon(symbol: state.liked ? "heart.fill" : "heart", size: 12, width: 24) { state.commands.toggleLike() }
-            .contentTransition(.symbolEffect(.replace))
+        switch control {
+        case .shuffle: ControlIcon(symbol: "shuffle", on: state.shuffle, size: 13) { state.commands.toggleShuffle() }
+        case .repeat: ControlIcon(symbol: state.repeatMode == 1 ? "repeat.1" : "repeat", on: state.repeatMode != 0, size: 13) { state.commands.cycleRepeat() }
+        case .like: LikeButton(state: state, size: 13, width: 36)
+        case .copy: CopyLinkButton(state: state, size: 13, width: 36)
+        }
     }
+}
+
+/// Media › Player › Title badge: what sits beside the title.
+enum TitleBadge: String, CaseIterable, Identifiable {
+    case explicit, format, none
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .explicit: "Explicit"
+        case .format: "Audio format"
+        case .none: "None"
+        }
+    }
+}
+
+/// Media › Player › Left and Right button: the controls at the ends of the transport row.
+enum PlayerControl: String, CaseIterable, Identifiable {
+    case shuffle, `repeat`, like, copy
+    var id: String { rawValue }
+
+    /// Music calls a like a favourite and draws it as a star; elsewhere it's a heart.
+    func title(source: String?) -> String {
+        switch self {
+        case .shuffle: "Shuffle"
+        case .repeat: "Repeat"
+        case .like: source == ScriptPlayer.music.bundleID ? "Favorite" : "Like"
+        case .copy: "Copy Link"
+        }
+    }
+
+    func symbol(source: String?) -> String {
+        switch self {
+        case .shuffle: "shuffle"
+        case .repeat: "repeat"
+        case .like: source == ScriptPlayer.music.bundleID ? "star" : "heart"
+        case .copy: "link"
+        }
+    }
+}
+
+/// The expanded player's Media › Player choices; the gallery pins its own through `MediaUI.layout`.
+struct PlayerLayout {
+    var badge = TitleBadge.explicit
+    var left = PlayerControl.shuffle
+    var right = PlayerControl.repeat
 }
 
 /// "Lossless", "Dolby Atmos" or "AutoMix", in small outlined capitals.
@@ -571,25 +664,32 @@ struct ExpandedPlayer: View {
 
     var body: some View {
         let prefs = MediaPreferences.shared
+        let layout = ui.layout ?? PlayerLayout(badge: prefs.titleBadge, left: prefs.leftControl, right: prefs.rightControl)
+        let ends = [layout.left, layout.right]
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 14) {
                 PlayerArtwork(state: state, ui: ui)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(displayTitle(state)).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
-                        if state.isExplicit { ExplicitBadge() }
+                        switch layout.badge {
+                        case .explicit: if state.isExplicit { ExplicitBadge() }
+                        case .format: if let format = state.audioFormat { SourceTag(text: format) }
+                        case .none: EmptyView()
+                        }
                     }
                     HStack(spacing: 6) {
                         if !state.artist.isEmpty {
                             Text(state.artist).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.muted).lineLimit(1)
                         }
-                        if let tag = state.inTransition ? "AutoMix" : state.audioFormat { SourceTag(text: tag) }
+                        if state.inTransition { SourceTag(text: "AutoMix") }
                     }
                 }
                 Spacer(minLength: 6)
                 HStack(spacing: 8) {
-                    if state.canLike { LikeButton(state: state) }
-                    if state.canCopyLink { CopyLinkButton(state: state) }
+                    // Like and copy wait here unless Media › Player put them at the ends of the transport row.
+                    if state.canLike, !ends.contains(.like) { LikeButton(state: state) }
+                    if state.canCopyLink, !ends.contains(.copy) { CopyLinkButton(state: state) }
                     if SpeedMenu.available { SpeedMenu(state: state, ui: ui) }
                     OutputButton(ui: ui)
                     SourceAppButton(state: state)
@@ -611,10 +711,9 @@ struct ExpandedPlayer: View {
             }
             .animation(.easeInOut(duration: 0.25), value: ui.notice)
             .padding(.top, 14)
-            // Podcasts skip within the episode (15 s back, 30 s ahead) instead of changing track.
-            let podcast = state.isPodcast && state.duration > 0
+            let podcast = state.skipsWithinEpisode
             HStack(spacing: 0) {
-                ControlIcon(symbol: "shuffle", on: state.shuffle, size: 13) { state.commands.toggleShuffle() }
+                EndControl(control: layout.left, state: state)
                 Spacer()
                 if podcast {
                     ControlIcon(symbol: "gobackward.15", size: 17) { state.seek(to: state.currentElapsed() - 15) }
@@ -631,7 +730,7 @@ struct ExpandedPlayer: View {
                     ControlIcon(symbol: "forward.fill", size: 17) { state.commands.next() }
                 }
                 Spacer()
-                ControlIcon(symbol: state.repeatMode == 1 ? "repeat.1" : "repeat", on: state.repeatMode != 0, size: 13) { state.commands.cycleRepeat() }
+                EndControl(control: layout.right, state: state)
             }
             .padding(.top, 8)
         }
@@ -655,9 +754,31 @@ struct ExpandedPlayer: View {
 
 // MARK: - Settings
 
+/// Whether the live waveform hears anything: without System Audio Recording access the tap only gets silence.
+struct AudioAccessRow: View {
+    let levels: AudioLevels
+
+    var body: some View {
+        switch levels.heard {
+        case false?:
+            LabeledContent {
+                Button("Open Settings…") { NSWorkspace.shared.open(AudioLevels.settingsURL) }
+            } label: {
+                Text("Audio access")
+                Text("Isola needs your permission to capture your audio.")
+            }
+        case true?:
+            LabeledContent("Audio access") { Label("Allowed", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
+        case nil:
+            LabeledContent("Audio access", value: "Checked once something plays")
+        }
+    }
+}
+
 struct MediaSettingsView: View {
     @Bindable var prefs = MediaPreferences.shared
     @Bindable var spotify = SpotifyWeb.shared
+    var levels = AudioLevels.shared
 
     /// The built-in modes, plus the saved choice and whichever Focus is on (custom modes are
     /// only known once seen, and only with Full Disk Access).
@@ -685,11 +806,18 @@ struct MediaSettingsView: View {
                     ForEach(SpectrogramStyle.allCases) { Text($0.title).tag($0) }
                 }
                 .disabled(!prefs.spectrogram)
+                Picker(selection: $prefs.colorStyle) {
+                    ForEach(MediaColorStyle.allCases) { Text($0.title).tag($0) }
+                } label: {
+                    Text("Colour")
+                    Text("Paints the spectrogram, the gradient progress bar and the Colored outline.")
+                }
                 Toggle(isOn: $prefs.liveWaveform) {
                     Text("Live waveform")
-                    Text("Bars follow the audio that's playing, at about 1% CPU. macOS asks for System Audio Recording access the first time.")
+                    Text("Captures your audio. The bars follow what's playing, at about 1% CPU; macOS asks for System Audio Recording access the first time.")
                 }
                 .disabled(!prefs.spectrogram)
+                if prefs.spectrogram, prefs.liveWaveform { AudioAccessRow(levels: levels) }
                 Toggle(isOn: $prefs.focusReplace) {
                     Text("Replace spectrogram with Focus")
                     Text("While the chosen Focus is on, the wing shows its symbol in its colour.")
@@ -705,6 +833,7 @@ struct MediaSettingsView: View {
                     Text("Artwork glare")
                     Text("A soft highlight on the cover that follows the pointer in the player.")
                 }
+                Toggle("Flip artwork on track change", isOn: $prefs.artworkFlip)
                 Toggle("Hide note symbol", isOn: $prefs.hideNoteSymbol)
                 Toggle(isOn: $prefs.hideTitleExtras) {
                     Text("Hide title extras")
@@ -721,6 +850,11 @@ struct MediaSettingsView: View {
                     Text("Keep volume control open")
                     Text("The output button's volume slider stays out when the player closes and reopens.")
                 }
+                Picker("Title badge", selection: $prefs.titleBadge) {
+                    ForEach(TitleBadge.allCases) { Text($0.title).tag($0) }
+                }
+                Picker("Left button", selection: $prefs.leftControl) { controlOptions }
+                Picker("Right button", selection: $prefs.rightControl) { controlOptions }
             }
             Section("Activity") {
                 Picker("Keep after pausing", selection: $prefs.idleSeconds) {
@@ -731,6 +865,24 @@ struct MediaSettingsView: View {
                     Text("2 minutes").tag(120.0)
                     Text("5 minutes").tag(300.0)
                     Text("Until playback stops").tag(-1.0)
+                }
+                Picker("Quick peek", selection: $prefs.peekOnChange) {
+                    Text("When media changes").tag(true)
+                    Text("Off").tag(false)
+                }
+                LabeledContent("Peek for") {
+                    HStack {
+                        Slider(value: Binding(get: { prefs.peekDuration }, set: { prefs.peekDuration = ($0 * 2).rounded() / 2 }), in: 1...6)
+                        Text("\(prefs.peekDuration.formatted()) s")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
+                }
+                .disabled(!prefs.peekOnChange)
+                Toggle(isOn: $prefs.hideWhileSourceActive) {
+                    Text("Hide while the playing app is in front")
+                    Text("It comes back, without a peek, when you switch to another app.")
                 }
                 Toggle("Ignore browsers", isOn: $prefs.excludeBrowsers)
                 Toggle("Ignore calls and chat apps", isOn: $prefs.excludeInapt)
@@ -749,13 +901,22 @@ struct MediaSettingsView: View {
                 }
             }
             Section("Source") {
+                Picker("Source", selection: $prefs.source) {
+                    ForEach(MediaSourceChoice.allCases) { Text($0.title).tag($0) }
+                }
                 LabeledContent("Now playing", value: sourceDescription)
-                Text("Music and Spotify are read with AppleScript only when macOS withholds system now-playing info and Automation access is already granted. Liking in Music and copying a Spotify or browser link ask for it the first time.")
+                Text("Automatic reads what macOS reports, then Music or Spotify through AppleScript where Automation access is already granted; System never uses AppleScript. Music or Spotify reads only that app and asks for access once. Liking in Music and copying a Spotify or browser link ask for it the first time.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Like reads "Favorite" with a star while Music plays.
+    private var controlOptions: some View {
+        let source = NowPlayingState.shared.sourceBundleID
+        return ForEach(PlayerControl.allCases) { Label($0.title(source: source), systemImage: $0.symbol(source: source)).tag($0) }
     }
 }
 

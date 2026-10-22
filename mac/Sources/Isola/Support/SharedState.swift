@@ -11,7 +11,8 @@ final class NowPlayingState {
     var artist = ""
     var album = ""
     var artwork: NSImage?
-    /// Two dominant artwork colours (top → bottom), used for the spectrogram gradient.
+    /// What the media visuals paint with (spectrogram, gradient progress bar, Colored outline): the artwork's
+    /// two dominant colours (top → bottom), or the one colour Media › Island › Colour picks.
     var colors: [NSColor] = [NSColor(red: 0.83, green: 0.62, blue: 0.63, alpha: 1), NSColor(red: 0.42, green: 0.35, blue: 0.42, alpha: 1)]
     var isPlaying = false
     var duration: TimeInterval = 0
@@ -38,6 +39,8 @@ final class NowPlayingState {
     var isEpisode = false
     var hasTrack: Bool { !title.isEmpty || !artist.isEmpty }
     var isPodcast: Bool { isEpisode || sourceBundleID == "com.apple.podcasts" }
+    /// Podcasts skip within the episode (15 s back, 30 s ahead) instead of changing track.
+    var skipsWithinEpisode: Bool { isPodcast && duration > 0 }
 
     /// Commands are wired by the Media module.
     var commands = MediaCommands()
