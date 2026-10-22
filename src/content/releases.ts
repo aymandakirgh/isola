@@ -28,29 +28,26 @@ export const RELEASES: {
   beta?: Release & { url: string };
 } = {
   trial: {
-    version: "1.4.9",
-    build: 153,
-    published_at: "2026-10-22T13:20:00.000Z",
-    assets: [{ name: "Isola.dmg", size_bytes: 5_987_194 }],
+    version: "1.4.10",
+    build: 154,
+    published_at: "2026-10-22T13:45:00.000Z",
+    assets: [{ name: "Isola.dmg", size_bytes: 5_987_037 }],
     minimum_system_version: "15",
   },
   stable: {
-    version: "1.4.9",
-    build: 153,
-    published_at: "2026-10-22T13:20:00.000Z",
-    assets: [{ name: "Isola.dmg", size_bytes: 5_987_194 }],
+    version: "1.4.10",
+    build: 154,
+    published_at: "2026-10-22T13:45:00.000Z",
+    assets: [{ name: "Isola.dmg", size_bytes: 5_987_037 }],
     minimum_system_version: "15 Sequoia",
-    notes: "Isola is now open source. Send Feedback opens a GitHub issue with your versions filled in.",
+    notes: "Dia joins the browsers Isola can script.",
     changes: {
       features: [
-        "Send Feedback… opens a new issue on GitHub, with your Isola and macOS versions filled in",
-      ],
-      fixes: [
-        "The time to leave notification has its event’s right-click menu and Option-click",
+        "Dia: copy the playing video’s link, and Show in Browser brings its tab forward",
       ],
     },
-    zip: "/downloads/Isola-1.4.9.zip",
-    sha256: "4c8b13b5a0bd96ad8326251d3301af8525e4be04e76838c88d4c3967794e159e",
-    signature: "v2K46sQF1FLhCi0owbvPy+yxBrzeiuOtQJ/mj8XHo++7V5XrGcgDqFwnw9w0wXtv/pZGTO9wtH6/TT6lIGzOAA==",
+    zip: "/downloads/Isola-1.4.10.zip",
+    sha256: "59c2813176e12b5a2c423bb2b60937a434d57d39a53451adbee25f35b0299176",
+    signature: "Iaau7PqR7Mt6RPNZsHd4Kv3i+akY/aKl3E3HhpGzfokpCWfnga48wHSJvrLZsT9CuUU8WPg8H9ss4uU9Ty7gCw==",
   },
 };

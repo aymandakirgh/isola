@@ -592,16 +592,17 @@ struct BrowserTab: Equatable {
     var url: String
 }
 
-/// Browsers whose dictionary lists windows › tabs with titles and URLs (Safari, and Chrome's
-/// dictionary shared by Edge, Brave, Arc, Vivaldi and Opera). Dia ships no AppleScript
-/// dictionary, so it is only brought forward. Methods run scripts: call on `Scripting.queue`.
+/// Browsers whose dictionary lists windows › tabs with titles and URLs (Safari, Chrome's
+/// dictionary shared by Edge, Brave, Arc, Vivaldi and Opera, and Dia's own, which has
+/// `isFocused` tabs and a `focus` command). Methods run scripts: call on `Scripting.queue`.
 struct Browser {
     let bundleID: String
     private var isSafari: Bool { bundleID == "com.apple.Safari" }
+    private var isDia: Bool { bundleID == "company.thebrowser.dia" }
 
     init?(bundleID: String) {
         let scriptable = ["com.apple.Safari", "com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser",
-                          "company.thebrowser.Browser", "com.vivaldi.Vivaldi", "com.operasoftware.Opera"]
+                          "company.thebrowser.Browser", "company.thebrowser.dia", "com.vivaldi.Vivaldi", "com.operasoftware.Opera"]
         guard scriptable.contains(bundleID) else { return nil }
         self.bundleID = bundleID
     }
@@ -609,7 +610,15 @@ struct Browser {
     /// Every tab of every window, front window first. «class acTI» is Chrome's `active tab index`.
     func tabs() -> [BrowserTab] {
         let f = Scripting.field, r = Scripting.record
-        let (title, active) = isSafari ? ("name", "index of current tab of window w") : ("title", "«class acTI» of window w")
+        let title = isSafari ? "name" : "title"
+        let active = isSafari ? "set activeIndex to index of current tab of window w"
+            : isDia ? """
+              set focused to isFocused of every tab of window w
+              repeat with k from 1 to count of focused
+                if item k of focused then set activeIndex to k
+              end repeat
+              """
+            : "set activeIndex to «class acTI» of window w"
         let listing = Scripting.run("""
         tell application id "\(bundleID)"
           set out to ""
@@ -617,7 +626,7 @@ struct Browser {
             try
               set activeIndex to 0
               try
-                set activeIndex to \(active)
+                \(active)
               end try
               set titles to \(title) of every tab of window w
               set urls to URL of every tab of window w
@@ -640,9 +649,11 @@ struct Browser {
         }
     }
 
-    /// Selects the tab, then raises its window (raising first would renumber the windows).
+    /// Selects the tab, then raises its window (raising first would renumber the windows). Dia's
+    /// `focus` brings the window forward itself, so raising "window w" after it would hit another.
     func focus(_ tab: BrowserTab) {
         let w = tab.window, t = tab.index
+        if isDia { Scripting.run("tell application id \"\(bundleID)\" to focus tab \(t) of window \(w)"); return }
         let select = isSafari ? "set current tab of window \(w) to tab \(t) of window \(w)"
             : bundleID == "company.thebrowser.Browser" ? "tell tab \(t) of window \(w) to select"
             : "set «class acTI» of window \(w) to \(t)"
@@ -717,6 +728,7 @@ enum NowPlayingExtras {
         precondition(playingTab(tabs, title: "Velvet Static")?.url == "https://soundcloud.com/oro/velvet")
         precondition(playingTab(tabs, title: "Night Ferries")?.url == "https://music.youtube.com/watch?v=c")
         precondition(playingTab(Array(tabs.prefix(1)), title: "Night Ferries") == nil)
+        precondition(Browser(bundleID: "company.thebrowser.dia") != nil && Browser(bundleID: "org.mozilla.firefox") == nil, "Dia scripts like Chrome; Firefox can't")
     }
 }
 

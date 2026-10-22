@@ -24,6 +24,15 @@ export const CHANGELOG: { updated: string; entries: Entry[] } = {
         "Stacked live activities, a compact mode for external displays, battery and charging HUDs, and a rebuilt settings window.",
       minors: [
         {
+          version: "1.4.10",
+          date: "22 Oct 2026",
+          note: null,
+          features: [
+            "Added copy link and tab focus for videos playing in Dia",
+          ],
+          fixes: [],
+        },
+        {
           version: "1.4.9",
           date: "22 Oct 2026",
           note: "Isola is now open source.",
