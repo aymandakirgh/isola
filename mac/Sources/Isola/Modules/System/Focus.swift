@@ -8,7 +8,7 @@ import SwiftUI
 final class FocusMonitor {
     static let shared = FocusMonitor()
 
-    struct Mode: Equatable {
+    struct Mode: Equatable, Identifiable {
         var id: String
         var name: String
         var symbol: String
@@ -51,7 +51,11 @@ final class FocusMonitor {
             state.symbol = mode.symbol
             state.tint = mode.tint
         }
-        if announce, SystemPreferences.shared.focusNotification, let shown = mode ?? previous {
+        let prefs = SystemPreferences.shared
+        if let mode, Self.isCustom(mode.id), prefs.focusSeenModes[mode.id] != [mode.name, mode.symbol] {
+            prefs.focusSeenModes[mode.id] = [mode.name, mode.symbol]
+        }
+        if announce, let shown = mode ?? previous, Self.announces(shown.id, enabled: prefs.focusNotification, muted: prefs.focusMutedModes) {
             Island.shared.post(FocusItems.changed(shown, on: mode != nil))
         }
         if announce, mode?.id == Self.sleepID, previous?.id != Self.sleepID, SystemPreferences.shared.sleepFocusSound {
@@ -66,6 +70,26 @@ final class FocusMonitor {
         } else {
             Island.shared.end(FocusItems.activityID)
         }
+    }
+
+    /// Settings › Focus › Allowed Notifications: the generic mode (no Full Disk Access) only
+    /// follows "Focus changes"; a named one can also be switched off on its own.
+    nonisolated static func announces(_ id: String, enabled: Bool, muted: [String]) -> Bool {
+        enabled && !muted.contains(id)
+    }
+
+    /// A mode Isola doesn't know by id: a custom one, remembered for the Allowed list.
+    nonisolated static func isCustom(_ id: String) -> Bool {
+        known[id] == nil && id != genericID && id != "debug"
+    }
+
+    /// The Allowed list: the built-in modes by name, then custom ones seen so far.
+    nonisolated static func listed(seen: [String: [String]]) -> [Mode] {
+        let builtIn = known.map { id, mode in Mode(id: id, name: mode.name, symbol: mode.symbol, tint: mode.tint) }
+        let custom = seen.filter { isCustom($0.key) }.map { id, info in
+            Mode(id: id, name: info.first ?? "Focus", symbol: info.count > 1 ? info[1] : "moon.fill", tint: .systemIndigo)
+        }
+        return builtIn.sorted { $0.name < $1.name } + custom.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     nonisolated static func read() -> Mode? {
@@ -108,10 +132,13 @@ final class FocusMonitor {
         sleepID: Mode(id: "", name: "Sleep", symbol: "bed.double.fill", tint: .systemMint),
         "com.apple.focus.personal-time": Mode(id: "", name: "Personal", symbol: "person.fill", tint: .systemPurple),
         "com.apple.donotdisturb.mode.driving": Mode(id: "", name: "Driving", symbol: "car.fill", tint: .systemOrange),
-        "com.apple.focus.fitness": Mode(id: "", name: "Fitness", symbol: "figure.run", tint: .systemGreen),
+        // Fitness keeps the id of the mode it grew out of (Workout); the ids here are the templates
+        // DoNotDisturb.framework lists in its DNDModeConfigurationService.
+        "com.apple.donotdisturb.mode.workout": Mode(id: "", name: "Fitness", symbol: "figure.run", tint: .systemGreen),
         "com.apple.focus.reading": Mode(id: "", name: "Reading", symbol: "book.fill", tint: .systemOrange),
         "com.apple.focus.gaming": Mode(id: "", name: "Gaming", symbol: "gamecontroller.fill", tint: .systemBlue),
         "com.apple.focus.mindfulness": Mode(id: "", name: "Mindfulness", symbol: "brain.head.profile", tint: .systemCyan),
+        "com.apple.focus.reduce-interruptions": Mode(id: "", name: "Reduce Interruptions", symbol: "line.3.horizontal.decrease", tint: .systemPink),
     ]
 
     nonisolated static let tints: [String: NSColor] = [
@@ -215,5 +242,6 @@ enum FocusL10n {
         "Reading": ["it": "Lettura", "de": "Lesen", "fr": "Lecture", "es": "Lectura"],
         "Gaming": ["it": "Videogiochi", "de": "Spielen", "fr": "Jeu vidéo", "es": "Juego"],
         "Mindfulness": ["it": "Mindfulness", "de": "Achtsamkeit", "fr": "Pleine conscience", "es": "Mindfulness"],
+        "Reduce Interruptions": ["it": "Meno interruzioni", "de": "Unterbrech. reduzieren", "fr": "Réduire les interruptions", "es": "Reducir interrupciones"],
     ]
 }
