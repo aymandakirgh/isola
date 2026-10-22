@@ -11,15 +11,22 @@ export type Release = {
   notes?: string;
   /** The update window's New Features, Bug Fixes and Important. */
   changes?: { features?: string[]; fixes?: string[]; important?: string[] };
+  /** Where the app sends people when it can't update in place: /download unless set. That page serves the
+   * stable DMG, so a beta brings its own (its zip, or a page of its own). */
+  url?: string;
   /** Update Now… in place, from mac/build/release.json (`scripts/build.sh release`): the zip's path on
    * this site (it ships with the release), its SHA-256 and Ed25519 signature. Without all three the app
-   * opens the download page instead. */
+   * opens `url` instead. */
   zip?: string;
   sha256?: string;
   signature?: string;
 };
 
-export const RELEASES: { trial: Release; stable: Release; beta?: Release } = {
+export const RELEASES: {
+  trial: Release;
+  stable: Release;
+  beta?: Release & { url: string };
+} = {
   trial: {
     version: "1.4.7",
     build: 151,

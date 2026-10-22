@@ -63,6 +63,8 @@ test("the update feed has the shape the Mac app decodes (Updates.Feed)", async (
     );
     if (release.zip) expect(release.zip).toMatch(/^https:\/\//);
   }
+  // When Isola can't install it in place it opens the url: the stable's download page serves the stable DMG.
+  if (feed.beta) expect(feed.beta.url).not.toBe(feed.url);
 });
 
 test("the purchase page shows a license key (the shared demo key without /api)", async ({

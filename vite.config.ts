@@ -67,10 +67,16 @@ function routeMeta(): Plugin {
       }
       // Update feed the Mac app polls once a day, in the shape Updates.Feed decodes (mac/Sources/Isola/
       // Modules/Settings/License.swift): the stable release at the top level, Early bird's under "beta".
-      // Fields a release doesn't have stay out (JSON.stringify drops undefined).
-      const entry = ({ assets: _, zip, ...release }: Release) => ({
+      // Fields a release doesn't have stay out (JSON.stringify drops undefined); its url is the download
+      // page unless it has its own.
+      const entry = ({
+        assets: _,
+        url = "/download",
+        zip,
+        ...release
+      }: Release) => ({
         ...release,
-        url: `${SITE}/download`,
+        url: new URL(url, SITE).href,
         zip: zip ? new URL(zip, SITE).href : undefined,
       });
       const feed = {
