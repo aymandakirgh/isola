@@ -376,13 +376,19 @@ struct NowPlayingWidget: View {
     @ViewBuilder private var background: some View {
         switch style {
         case .glass, .frosted:
+            // The gallery takes the branch this Mac does, with a tint where it can't sample what's behind.
             ZStack {
-                if gallery {
-                    LockPalette.stone900.opacity(style == .glass ? 0.42 : 0.6)
-                } else if style == .glass, #available(macOS 26, *) {
-                    // Tahoe: Liquid Glass. Frosted keeps the blur material on every version.
-                    Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                if style == .glass, #available(macOS 26, *) {
+                    // Tahoe: Liquid Glass.
+                    if gallery {
+                        LockPalette.stone900.opacity(0.42)
+                    } else {
+                        Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    }
+                } else if gallery {
+                    LockPalette.stone900.opacity(0.6)
                 } else {
+                    // Frosted on every version, and Glass before Tahoe: the blur material.
                     Rectangle().fill(.ultraThinMaterial)
                 }
                 LockPalette.stone900.opacity(0.15)

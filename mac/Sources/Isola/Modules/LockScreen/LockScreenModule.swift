@@ -57,6 +57,9 @@ enum LockScreenModule {
         precondition(SunEvent.next(sunrises: [t], sunsets: [], after: t) == nil, "nothing ahead, nothing shown")
         precondition(WeatherWidgetStyle(stored: "detailed") == .precipitation && WeatherWidgetStyle(stored: "sun") == .sun
             && WeatherWidgetStyle(stored: "compact") == .compact && WeatherWidgetStyle(stored: "?") == .conditions, "stored weather styles")
+        let liquidGlass = if #available(macOS 26, *) { true } else { false }
+        precondition(NowPlayingWidgetStyle.offered.contains(.glass) == liquidGlass && NowPlayingWidgetStyle.glass.drawn == (liquidGlass ? .glass : .frosted)
+            && NowPlayingWidgetStyle.offered.allSatisfy { $0.drawn == $0 }, "Glass only where it's Liquid Glass (macOS 26), else it reads as Frosted")
     }
 }
 
