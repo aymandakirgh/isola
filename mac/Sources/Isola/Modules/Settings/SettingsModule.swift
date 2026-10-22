@@ -11,7 +11,16 @@ enum SettingsModule {
         Debug.on("settings.open") { SettingsWindow.show(section: $0["section"]) }
         Debug.on("settings.close") { _ in SettingsWindow.close() }
         Debug.on("settings.onboarding") { _ in OnboardingWindow.show() }
-        // Live permission checks: `perm.request kind=bluetooth|calendar|focus|accessibility|automation|fullDiskAccess|location`.
+        // The menu bar menu as it would open now ("⌥ " marks an Option alternate), and running one of its items by title.
+        Debug.on("menu.state") { _ in Debug.reply(MenuEntry.describe(MenuEntry.entries(nowPlaying: nil))) }
+        Debug.on("menu.run") { a in MenuEntry.run(a["title"] ?? "", in: MenuEntry.entries(nowPlaying: nil)) }
+        // The shown island item's right-click menu: its titles, or opened under the island.
+        Debug.on("island.menu.state") { _ in Debug.reply(Island.shared.current?.contextMenu.map { MenuEntry.describe($0()) } ?? "no menu") }
+        Debug.on("island.menu") { _ in
+            guard let rect = IslandWindows.shared.panels.first?.islandRect(slop: 0) else { return }
+            IslandWindows.shared.showContextMenu(at: NSPoint(x: rect.midX, y: rect.minY))
+        }
+        // Live permission checks: `perm.request kind=bluetooth|calendar|focus|accessibility|automation|browser|fullDiskAccess|location`.
         Debug.on("perm.request") { a in
             if a["kind"] == "location" { return Weather.shared.useCurrentLocation() }
             Permission(rawValue: a["kind"] ?? "")?.request {}
@@ -40,21 +49,62 @@ enum SettingsModule {
     static func gallery() {
         License.selfCheck()
         SettingsSync.selfCheck()
+        selfCheck()
         Updates.gallery()
         SettingsGallery.render()
+    }
+
+    /// The menu bar menu's alternates, the sidebar's sections, onboarding's steps and the feedback e-mail.
+    static func selfCheck() {
+        for licensed in [false, true] {
+            let entries = MenuEntry.entries(nowPlaying: nil, licensed: licensed)
+            for (i, entry) in entries.enumerated() {
+                guard case let .action(_, _, key, _, true, _) = entry else { continue }
+                guard i > 0, case let .action(_, _, primaryKey, _, false, _) = entries[i - 1], primaryKey == key else {
+                    preconditionFailure("menu: an Option alternate follows a plain item with the same key")
+                }
+            }
+            precondition(MenuEntry.describe(entries).contains("Activate Isola…") != licensed, "menu: Activate only while unlicensed")
+            precondition(MenuEntry.describe(entries).contains("Check License Status"), "menu: the license check is always there")
+        }
+
+        let page = { (id: String, group: String?) in SettingsPage(id: id, title: id, symbol: "circle", tint: .gray, group: group) { AnyView(EmptyView()) } }
+        let pages = [page("general", nil), page("island", nil), page("battery", "notifications"), page("media", "liveActivities"),
+                     page("focus", "notifications"), page("hud", nil), page("calendar", "liveActivities"), page("about", nil)]
+        let sections = SettingsPages.sections(pages)
+        precondition(sections.map(\.title) == [nil, "Notifications", "Live Activities", nil], "sidebar: groups under their titles")
+        precondition(sections.map { $0.pages.map(\.id) } == [["general", "island"], ["battery", "focus"], ["media", "calendar"], ["hud", "about"]],
+                     "sidebar: each page once, in order, ungrouped ones around the groups")
+
+        let unlicensed = OnboardingModel(skipsLicense: false), licensed = OnboardingModel(skipsLicense: true)
+        unlicensed.step = .permissions
+        unlicensed.advance()
+        licensed.step = .permissions
+        licensed.advance()
+        precondition(unlicensed.step == .license && licensed.step == .done, "onboarding: the license step only while unlicensed")
+        licensed.back()
+        precondition(licensed.step == .permissions && licensed.steps.count == 3, "onboarding: back skips it too")
+
+        let mail = Feedback.mail(version: "1.4.7", build: "151", system: "Version 15.6 (Build 24G84)")
+        let body = mail.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems?.first { $0.name == "body" }?.value
+        precondition(mail?.absoluteString.hasPrefix("mailto:\(Feedback.address)?subject=Isola%20feedback&body=") == true, "feedback: a mailto with a subject")
+        precondition(body?.hasSuffix("Isola 1.4.7 (151) · macOS Version 15.6 (Build 24G84)") == true, "feedback: version, build and macOS in the body")
     }
 }
 
 // MARK: - Menu bar item
 
-/// Menu content as data, so the real NSMenu and the gallery mock can't drift apart.
+/// Menu content as data, so the real NSMenu and the gallery mock can't drift apart. An
+/// `alternate` action replaces the action before it while Option is held (same key, plus ⌥).
 enum MenuEntry {
     case nowPlaying(title: String, artist: String)
-    case action(String, symbol: String? = nil, key: String = "", checked: Bool = false, run: () -> Void)
+    case action(String, symbol: String? = nil, key: String = "", checked: Bool = false, alternate: Bool = false, run: () -> Void)
     case submenu(String, symbol: String?, [MenuEntry])
     case separator
 
-    @MainActor static func entries(nowPlaying np: (title: String, artist: String, playing: Bool, shuffle: Bool, repeatMode: Int)?) -> [MenuEntry] {
+    /// `licensed` pins the license state (gallery); nil reads it.
+    @MainActor static func entries(nowPlaying np: (title: String, artist: String, playing: Bool, shuffle: Bool, repeatMode: Int)?, licensed: Bool? = nil) -> [MenuEntry] {
+        let licensed = licensed ?? (License.shared.status == .licensed)
         var list: [MenuEntry] = []
         if let np {
             let commands = NowPlayingState.shared.commands
@@ -75,7 +125,20 @@ enum MenuEntry {
         list += [
             .submenu("Start Timer", symbol: "timer", timers),
             .separator,
+        ]
+        // Showing the License page syncs with the licence server: that is the status check too.
+        let license = { SettingsWindow.show(section: "license") }
+        list += licensed ? [.action("Check License Status", symbol: "checkmark.seal", run: license)] : [
+            .action("Activate Isola…", symbol: "key", run: license),
+            .action("Check License Status", symbol: "checkmark.seal", alternate: true, run: license),
+        ]
+        list += [
+            .action("Send Feedback to Isola…", symbol: "envelope") { Feedback.send() },
+            .action("Copy Device ID", symbol: "doc.on.doc", alternate: true) { copyDeviceID() },
+            .action("About Isola", symbol: "info.circle") { SettingsWindow.show(section: "about") },
+            .action("Reset Onboarding", symbol: "arrow.counterclockwise", alternate: true) { resetOnboarding() },
             .action("Settings…", symbol: "gearshape", key: ",") { SettingsWindow.show() },
+            .action("Reset Permissions…", symbol: "lock.rotation", key: ",", alternate: true) { resetPermissions() },
             .separator,
             .action("Quit Isola", key: "q") { NSApp.terminate(nil) },
         ]
@@ -86,6 +149,75 @@ enum MenuEntry {
     /// (release builds don't listen to isolactl).
     @MainActor static func startTimer(minutes: Int) {
         Debug.run("timer.start", ["seconds": String(minutes * 60)])
+    }
+
+    // MARK: Support tools (Option held)
+
+    /// The id the licence server knows this Mac by, for support to look up. The hardware UUID
+    /// itself never leaves the Mac: the license keeps only a salted hash of it.
+    @MainActor static func copyDeviceID() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(License.shared.thisMac.id, forType: .string)
+    }
+
+    @MainActor static func resetOnboarding() {
+        UserDefaults.standard.removeObject(forKey: "onboarded")
+        OnboardingWindow.show()
+    }
+
+    /// After a confirmation: macOS forgets every permission Isola has, and Isola relaunches.
+    @MainActor static func resetPermissions() {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = "Reset Isola’s permissions?"
+        alert.informativeText = "macOS forgets the Accessibility, Calendar, Bluetooth, Automation and other access you gave Isola, and Isola relaunches. Allow each one again when a feature asks for it."
+        alert.addButton(withTitle: "Reset and Relaunch")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let reset = Process()
+        reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        reset.arguments = ["reset", "All", Bundle.main.bundleIdentifier ?? "app.isola.mac"]
+        if (try? reset.run()) != nil { reset.waitUntilExit() }
+        relaunch()
+    }
+
+    /// Quits and opens the app again a second later. ponytail: only a bundled build reopens;
+    /// `swift run` just quits.
+    @MainActor static func relaunch() {
+        let app = Bundle.main.bundlePath
+        if app.hasSuffix(".app") {
+            let reopen = Process()
+            reopen.executableURL = URL(fileURLWithPath: "/bin/sh")
+            reopen.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", app]
+            try? reopen.run()
+        }
+        NSApp.terminate(nil)
+    }
+
+    // MARK: isolactl
+
+    /// One line per entry: "⌥ " before an alternate, "›" after a submenu.
+    static func describe(_ entries: [MenuEntry]) -> String {
+        entries.compactMap { entry in
+            switch entry {
+            case let .nowPlaying(title, _): title
+            case let .action(title, _, _, _, alternate, _): (alternate ? "⌥ " : "") + title
+            case let .submenu(title, _, _): title + " ›"
+            case .separator: nil
+            }
+        }
+        .joined(separator: " | ")
+    }
+
+    /// Runs the action titled `title`, alternates and submenus included.
+    @MainActor static func run(_ title: String, in entries: [MenuEntry]) {
+        for entry in entries {
+            switch entry {
+            case let .action(t, _, _, _, _, action) where t == title: return action()
+            case let .submenu(_, _, children): run(title, in: children)
+            default: continue
+            }
+        }
     }
 }
 
@@ -119,6 +251,12 @@ final class StatusItem: NSObject, NSMenuDelegate {
         menu.delegate = self
         item.menu = menu
         self.item = item
+        syncVisibility()
+    }
+
+    /// General › Hide menu bar icon.
+    func syncVisibility() {
+        item?.isVisible = !Preferences.shared.hideMenuBarIcon
     }
 
     nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
@@ -130,7 +268,8 @@ final class StatusItem: NSObject, NSMenuDelegate {
         }
     }
 
-    private static func item(for entry: MenuEntry) -> NSMenuItem {
+    /// One entry as a real menu item (also the island's right-click menus).
+    static func item(for entry: MenuEntry) -> NSMenuItem {
         switch entry {
         case .separator:
             return .separator()
@@ -140,10 +279,15 @@ final class StatusItem: NSObject, NSMenuDelegate {
             item.subtitle = artist
             item.isEnabled = false
             return item
-        case let .action(title, symbol, key, checked, run):
+        case let .action(title, symbol, key, checked, alternate, run):
             let item = ClosureMenuItem(title, key: key, run: run)
             item.image = symbol.flatMap(Self.symbol)
             item.state = checked ? .on : .off
+            if alternate {
+                // Shown in place of the item before it (same key equivalent) while Option is down.
+                item.isAlternate = true
+                item.keyEquivalentModifierMask = key.isEmpty ? .option : [.command, .option]
+            }
             return item
         case let .submenu(title, symbol, children):
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -225,8 +369,15 @@ enum SettingsGallery {
 
     static func render() {
         let license = License.shared
-        let pages = SettingsPages.all(nav: SettingsNav()).map(\.id).filter { $0 != "license" }
+        let pages = SettingsPages.all(nav: SettingsNav()).filter { !$0.soon }.map(\.id).filter { $0 != "license" }
         for id in pages { window("settings-\(id)", section: id) }
+        // The whole sidebar: groups, and File Tray with its Soon badge.
+        if let dir = directory {
+            let nav = SettingsNav()
+            let w = SettingsWindow.makeWindow(nav: nav)
+            w.setContentSize(NSSize(width: 680, height: 640))
+            capture(w, name: "settings-sidebar", dir: dir)
+        }
 
         let hour: TimeInterval = 3600
         license.preview(key: nil, devices: [], firstLaunch: Date().addingTimeInterval(-10 * hour))
@@ -250,18 +401,35 @@ enum SettingsGallery {
                         message: License.unreachable, serverStatus: "offline")
         window("settings-license-offline", section: "license")
 
-        for step in OnboardingModel.Step.allCases {
-            let model = OnboardingModel()
+        // Onboarding on a first run: trial running, one permission prompt up (Browsers: "Waiting…").
+        license.preview(key: nil, devices: [], firstLaunch: Date().addingTimeInterval(-hour))
+        func onboarding(_ name: String, _ step: OnboardingModel.Step, _ setUp: (OnboardingModel) -> Void = { _ in }) {
+            let model = OnboardingModel(skipsLicense: false)
             model.step = step
-            model.statuses = [.accessibility: .granted, .calendar: .notDetermined, .bluetooth: .granted, .automation: .denied, .focus: .notDetermined, .fullDiskAccess: .denied]
-            if let dir = directory { capture(OnboardingWindow.makeWindow(model: model), name: "onboarding-\(step)", dir: dir) }
+            model.statuses = [.accessibility: .granted, .calendar: .notDetermined, .bluetooth: .granted, .automation: .denied, .browser: .notDetermined,
+                              .focus: .notDetermined, .fullDiskAccess: .denied]
+            model.pending = [.browser]
+            setUp(model)
+            if let dir = directory { capture(OnboardingWindow.makeWindow(model: model), name: name, dir: dir) }
         }
+        for step in OnboardingModel.Step.allCases { onboarding("onboarding-\(step)", step) }
+        license.preview(key: nil, devices: [], firstLaunch: Date().addingTimeInterval(-hour), message: "That doesn’t look like an Isola license key.")
+        onboarding("onboarding-license-key", .license) { $0.showKey = true }
+        license.preview(key: License.makeKey(seed: 7), devices: [studio, me], firstLaunch: Date().addingTimeInterval(-hour))
+        onboarding("onboarding-license-active", .license)
 
-        snapshot("statusmenu", size: CGSize(width: 300, height: 300)) {
-            StatusMenuMock(entries: MenuEntry.entries(nowPlaying: ("Ocean City", "Pacific Coliseum", true, true, 2)))
+        snapshot("statusmenu", size: CGSize(width: 300, height: 360)) {
+            StatusMenuMock(entries: MenuEntry.entries(nowPlaying: ("Ocean City", "Pacific Coliseum", true, true, 2), licensed: false))
         }
-        snapshot("statusmenu-idle", size: CGSize(width: 300, height: 190)) {
-            StatusMenuMock(entries: MenuEntry.entries(nowPlaying: nil))
+        snapshot("statusmenu-idle", size: CGSize(width: 300, height: 250)) {
+            StatusMenuMock(entries: MenuEntry.entries(nowPlaying: nil, licensed: false))
+        }
+        // Option held: the support tools take the place of the items above them.
+        snapshot("statusmenu-option", size: CGSize(width: 300, height: 250)) {
+            StatusMenuMock(entries: MenuEntry.entries(nowPlaying: nil, licensed: false), option: true)
+        }
+        snapshot("statusmenu-licensed", size: CGSize(width: 300, height: 230)) {
+            StatusMenuMock(entries: MenuEntry.entries(nowPlaying: nil, licensed: true))
         }
         snapshot("statusitem-glyph", size: CGSize(width: 120, height: 44)) {
             HStack(spacing: 18) {
@@ -277,10 +445,19 @@ enum SettingsGallery {
 /// Picture of the status menu for the gallery, drawn from the same entries.
 struct StatusMenuMock: View {
     var entries: [MenuEntry]
+    /// Option held: each alternate replaces the item before it.
+    var option = false
+
+    private var shown: [MenuEntry] {
+        entries.reduce(into: []) { list, entry in
+            guard case .action(_, _, _, _, true, _) = entry else { return list.append(entry) }
+            if option { list[list.count - 1] = entry }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in row(entry) }
+            ForEach(Array(shown.enumerated()), id: \.offset) { _, entry in row(entry) }
         }
         .padding(5)
         .frame(width: 260)
@@ -296,8 +473,8 @@ struct StatusMenuMock: View {
             Divider().padding(.vertical, 4).padding(.horizontal, 8)
         case let .nowPlaying(title, artist):
             line(symbol: "music.note", title: title, subtitle: artist, trailing: nil, dim: true)
-        case let .action(title, symbol, key, checked, _):
-            line(symbol: symbol, title: title, subtitle: nil, trailing: checked ? "✓" : key.isEmpty ? nil : "⌘\(key.uppercased())", dim: false)
+        case let .action(title, symbol, key, checked, alternate, _):
+            line(symbol: symbol, title: title, subtitle: nil, trailing: checked ? "✓" : key.isEmpty ? nil : "\(alternate ? "⌥⌘" : "⌘")\(key.uppercased())", dim: false)
         case let .submenu(title, symbol, _):
             line(symbol: symbol, title: title, subtitle: nil, trailing: "›", dim: false)
         }

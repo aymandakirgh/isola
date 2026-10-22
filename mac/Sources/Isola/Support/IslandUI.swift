@@ -53,12 +53,15 @@ struct LevelBar: View {
 
 /// iOS-style marquee, 30 pt/s like the web demo: text that doesn't fit rests left-aligned for
 /// `pause` seconds, scrolls until the next copy takes its place, and repeats. Near the edges it
-/// blurs and fades progressively (the leading edge only while moving). Text that fits sits centred, untouched.
+/// blurs and fades progressively (only fades, with General › Progressive blur off; the leading
+/// edge only while moving). Text that fits sits centred, untouched.
 struct Marquee<Content: View>: View {
     var speed: CGFloat = 30
     var pause: TimeInterval = 1.5
     /// Pins the loop clock (gallery snapshots).
     var clock: TimeInterval?
+    /// Pins General › Progressive blur (gallery snapshots); nil follows the setting.
+    var blur: Bool?
     @ViewBuilder var content: Content
     @StateObject private var model = MarqueeModel()
 
@@ -85,7 +88,7 @@ struct Marquee<Content: View>: View {
                 }
                 .offset(x: x)
                 .frame(width: geo.size.width, alignment: scrolls ? .leading : .center)
-                .progressiveBlur(radius: 2.5, sharp: MarqueeMask.sharp(lead, trail), blurred: MarqueeMask.blurred(lead, trail))
+                .progressiveBlur(blur ?? Preferences.shared.progressiveBlur, radius: 2.5, sharp: MarqueeMask.sharp(lead, trail), blurred: MarqueeMask.blurred(lead, trail))
                 .mask(MarqueeMask.fade(lead, trail))
             }
         }
@@ -138,6 +141,11 @@ extension View {
     /// takes no clicks and is hidden from VoiceOver.
     func progressiveBlur<Sharp: View, Blurred: View>(radius: CGFloat, sharp: Sharp, blurred: Blurred) -> some View {
         mask(sharp).overlay(blur(radius: radius).mask(blurred).allowsHitTesting(false).accessibilityHidden(true))
+    }
+
+    /// The same, only when `on` (General › Progressive blur); off, the view is left as it is.
+    @ViewBuilder func progressiveBlur<Sharp: View, Blurred: View>(_ on: Bool, radius: CGFloat, sharp: Sharp, blurred: Blurred) -> some View {
+        if on { progressiveBlur(radius: radius, sharp: sharp, blurred: blurred) } else { self }
     }
 }
 

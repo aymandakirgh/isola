@@ -1,11 +1,25 @@
 import SwiftUI
 import Observation
 
+/// Island › Gestures, as `Island.swipe` reads them.
+struct Gestures {
+    var toggle = true, skip = true, dismiss = true, cycle = true
+}
+
 /// The island's state machine. Modules start/end live activities and post transient
 /// notifications or HUDs; the view derives size, corners and content from this state.
 @MainActor @Observable
 final class Island {
     static let shared = Island()
+
+    /// Island › Gestures, read at every swipe (the self-check's island sets its own).
+    @ObservationIgnored var gestures: @MainActor () -> Gestures = {
+        let p = Preferences.shared
+        return Gestures(toggle: p.swipeToToggle, skip: p.swipeToSkip, dismiss: p.swipeToDismiss, cycle: p.swipeToCycle)
+    }
+    /// Island › Idle Activity: what opens with nothing running, and whether it also stays in the
+    /// compact island (`forced`). Nil for none; `Modules` wires it to the media and calendar views.
+    @ObservationIgnored var idle: @MainActor () -> (item: IslandItem, forced: Bool)? = { nil }
 
     private(set) var activities: [IslandItem] = []
     private(set) var transient: IslandItem?
@@ -17,6 +31,8 @@ final class Island {
     private(set) var activityIndex = 0
     /// Live activities swiped away, with the content key they had then (see `dismiss`).
     private(set) var dismissed: [String: String] = [:]
+    /// The last live activity with a panel to end (Idle Activity › Most Recent).
+    private(set) var lastEnded: IslandItem?
     /// Displays whose island is hidden for a fullscreen app/game or Mission Control (see Fullscreen.swift).
     var suppressed: Set<CGDirectDisplayID> = []
 
@@ -38,8 +54,13 @@ final class Island {
         return list.isEmpty ? nil : list[activityIndex % list.count]
     }
 
-    /// What the island shows right now: a transient beats the live activity.
-    var current: IslandItem? { transient ?? currentActivity }
+    /// What the island shows right now: a transient beats the live activity. With nothing
+    /// running, the Idle Activity shows while it's open, and all the time when forced.
+    var current: IslandItem? {
+        if let item = transient ?? currentActivity { return item }
+        guard let idle = idle(), expanded || idle.forced else { return nil }
+        return idle.item
+    }
 
     /// Duo mode: the other live activity, shown in a bubble beside the island.
     var secondary: IslandItem? { Preferences.shared.duo ? partner : nil }
@@ -98,7 +119,8 @@ final class Island {
     }
 
     func end(_ id: String) {
-        guard activities.contains(where: { $0.id == id }) else { return }
+        guard let item = activities.first(where: { $0.id == id }) else { return }
+        if item.expanded != nil { lastEnded = item }
         let shown = currentActivity?.id
         withAnimation(Springs.collapseActivity) {
             activities.removeAll { $0.id == id }
@@ -122,13 +144,14 @@ final class Island {
 
     func isRunning(_ id: String) -> Bool { activities.contains { $0.id == id } }
 
-    /// Swipe down / middle click: show the next live activity.
-    func cycle() {
+    /// Swipe down / middle click: show the next live activity (false: there is no other).
+    @discardableResult func cycle() -> Bool {
         let list = sortedActivities
-        guard list.count > 1 else { return }
+        guard list.count > 1 else { return false }
         if expanded { cycledWhileExpanded = true }
         let next = list[(activityIndex + 1) % list.count].id
         withAnimation(Springs.expand) { show(next) }
+        return true
     }
 
     /// Duo mode: clicking the bubble swaps the two activities.
@@ -182,6 +205,7 @@ final class Island {
         hoverExpandTimer?.invalidate()
         guard on != expanded, !(on && !canExpand) else { return }
         restoreTimer?.invalidate()
+        haptic()
         withAnimation(on ? Springs.openPanel : Springs.collapseActivity) {
             expanded = on
             if on { peeking = false; hovering = false }
@@ -198,9 +222,10 @@ final class Island {
         }
     }
 
-    /// Only items with a panel expand; with "Expand while inactive" off, idle ones (paused media) stay compact.
+    /// Only items with a panel expand (with nothing running, the Idle Activity's); with "Expand
+    /// while inactive" off, idle ones (paused media) stay compact.
     private var canExpand: Bool {
-        guard let item = current, item.expanded != nil else { return false }
+        guard let item = current ?? idle()?.item, item.expanded != nil else { return false }
         return Preferences.shared.expandWhileInactive || item.inactive?() != true
     }
 
@@ -216,10 +241,12 @@ final class Island {
         if !on { setPressed(false) }
         if let item = current, item.peekOnHover, item.peek != nil, !expanded {
             hovering = on
+            if on { haptic() }
             quickPeek(on)
             return
         }
         guard !peeking else { return }
+        if on, !expanded { haptic() }
         withAnimation(on ? Springs.hoverIn : Springs.hoverOut) { hovering = on && !expanded }
     }
 
@@ -237,21 +264,43 @@ final class Island {
     }
 
     func swipe(_ direction: SwipeDirection) {
-        if current?.onSwipe?(direction) == true { return }
+        let g = gestures()
+        // A gesture switched off in Island › Gestures reaches neither the activity nor the island:
+        // horizontal swipes are the media skip, swipe up on a compact activity dismisses it.
         switch direction {
-        case .down: expanded ? cycle() : setExpanded(true)
+        case .left, .right: guard g.skip else { return }
+        case .up where !expanded && !peeking && transient == nil: guard g.dismiss else { return }
+        default: break
+        }
+        if current?.onSwipe?(direction) == true { return haptic() }
+        switch direction {
+        case .down:
+            if !expanded {
+                if g.toggle { setExpanded(true) }
+            } else if g.cycle, cycle() {
+                haptic()
+            }
         case .up:
             if expanded {
-                setExpanded(false)
+                if g.toggle { setExpanded(false) }
             } else if peeking {
                 quickPeek(false)
+                haptic()
             } else if transient != nil {
                 dismissTransient()
+                haptic()
             } else if let id = currentActivity?.id {
                 dismiss(id)
+                haptic()
             }
         case .left, .right: break
         }
+    }
+
+    /// A trackpad tap for the island's own motion (Island › Interaction › Haptic feedback).
+    private func haptic() {
+        guard Preferences.shared.haptics else { return }
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }
 
     // MARK: - Geometry
@@ -291,9 +340,12 @@ final class Island {
 
     // MARK: - Self-check (`Isola --gallery`)
 
-    /// Swipe-up dismissal, duo pairing and the restore after cycling, on a private instance.
+    /// Swipe-up dismissal, duo pairing, the restore after cycling, Island › Gestures switched off
+    /// and the Idle Activity, on private instances.
     static func selfCheck() {
         let island = Island()
+        var g = Gestures()
+        island.gestures = { g }
         func item(_ id: String, _ priority: Int, key: String? = nil) -> IslandItem {
             IslandItem(id: id, kind: .liveActivity, priority: priority) { EmptyView() } trailing: { EmptyView() }
                 .expanded { EmptyView() }
@@ -315,5 +367,55 @@ final class Island {
         precondition(island.current?.id == "timer", "the cycled item stays for a moment")
         RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         precondition(island.current?.id == "music", "then the most important activity returns")
+
+        // Island › Gestures, one switch at a time.
+        g.cycle = false
+        island.setExpanded(true)
+        island.swipe(.down)
+        precondition(island.current?.id == "music" && island.expanded, "swipe to cycle off: swipe down leaves the panel as it is")
+        g.toggle = false
+        island.swipe(.up)
+        precondition(island.expanded, "swipe to open and close off: swipe up doesn't close")
+        island.setExpanded(false)
+        island.swipe(.down)
+        precondition(!island.expanded, "…and swipe down doesn't open")
+        g.dismiss = false
+        island.swipe(.up)
+        precondition(island.current?.id == "music", "swipe to dismiss off: the compact activity stays")
+        island.post(IslandItem(id: "note", kind: .notification) { EmptyView() } trailing: { EmptyView() }, duration: 60)
+        island.swipe(.up)
+        precondition(island.transient == nil, "…but a notification still closes")
+        var skips = 0
+        island.start(item("player", 20).onSwipe { direction in
+            guard direction == .left || direction == .right else { return false }
+            skips += 1
+            return true
+        })
+        g.skip = false
+        island.swipe(.right)
+        precondition(skips == 0, "swipe to skip off: horizontal swipes don't reach the activity")
+        g.skip = true
+        island.swipe(.right)
+        precondition(skips == 1, "on, they do")
+
+        // Island › Idle Activity: with nothing running a tap or swipe down opens it; forced, it also stays compact.
+        let quiet = Island()
+        quiet.gestures = { Gestures() }
+        var forced = false
+        quiet.idle = { (item("idle.calendar", 0), forced) }
+        precondition(quiet.isIdle && quiet.current == nil, "nothing running: idle")
+        quiet.tap()
+        precondition(quiet.expanded && quiet.current?.id == "idle.calendar", "a tap opens the idle panel")
+        quiet.swipe(.up)
+        precondition(!quiet.expanded && quiet.isIdle, "swipe up closes it")
+        quiet.swipe(.down)
+        precondition(quiet.expanded && quiet.current?.id == "idle.calendar", "swipe down opens it too")
+        quiet.setExpanded(false)
+        forced = true
+        precondition(quiet.current?.id == "idle.calendar" && !quiet.isIdle, "forced: it stays in the compact island")
+        quiet.start(item("music", 10))
+        precondition(quiet.current?.id == "music", "a live activity takes over")
+        quiet.end("music")
+        precondition(quiet.lastEnded?.id == "music" && quiet.current?.id == "idle.calendar", "and leaves Most Recent behind when it ends")
     }
 }

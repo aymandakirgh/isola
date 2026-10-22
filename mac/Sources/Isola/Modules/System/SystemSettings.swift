@@ -64,51 +64,62 @@ final class SystemPreferences {
     }
 }
 
+/// Settings › Notifications: the Battery, Connectivity and Focus pages (`page`), or all three
+/// (gallery). The lock activity and its sounds are on Island › Sounds.
 struct SystemSettingsView: View {
+    var page: String?
     @Bindable var prefs = SystemPreferences.shared
-    @Bindable var core = Preferences.shared
 
     var body: some View {
         Form {
-            Section("Battery") {
-                Toggle("Charger connected and disconnected", isOn: $prefs.chargingNotification)
-                Toggle("Charging live activity", isOn: $prefs.chargingActivity)
-                Toggle("Low battery warning", isOn: $prefs.lowBatteryNotification)
-                Picker("Warn at", selection: $prefs.lowBatteryThreshold) {
-                    ForEach([0.1, 0.15, 0.2, 0.25, 0.3], id: \.self) { Text("\(Int($0 * 100))%").tag($0) }
-                }
-                .disabled(!prefs.lowBatteryNotification)
-                Toggle("Low battery sound", isOn: $prefs.lowBatterySound)
-                    .disabled(!prefs.lowBatteryNotification)
-                Toggle("Low Power Mode", isOn: $prefs.lowPowerNotification)
-            }
-            Section("Connectivity") {
-                Toggle("Device connected and disconnected", isOn: $prefs.bluetoothNotification)
-                Toggle("Include keyboards, mice and other devices", isOn: $prefs.bluetoothAllDevices)
-                Toggle("Low battery warning for devices", isOn: $prefs.deviceLowBattery)
-                Toggle("Low battery sound for devices", isOn: $prefs.deviceLowBatterySound)
-                    .disabled(!prefs.deviceLowBattery)
-            }
-            Section {
-                Toggle("Focus changes", isOn: $prefs.focusNotification)
-                Toggle("Focus live activity", isOn: $prefs.focusActivity)
-                Toggle("Sound when Sleep turns on", isOn: $prefs.sleepFocusSound)
-                PermissionRow(permission: .focus)
-                PermissionRow(permission: .fullDiskAccess)
-            } header: {
-                Text("Focus")
-            } footer: {
-                Text("Without Full Disk Access, Isola can only tell that a Focus is on, not which one.")
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            Section("Lock") {
-                Toggle("Lock live activity", isOn: $prefs.lockActivity)
-                Toggle("Sound on unlock", isOn: $core.unlockSound)
-                Toggle("Sound on lock", isOn: $core.lockSound)
-            }
+            if shows("battery") { battery }
+            if shows("connectivity") { connectivity }
+            if shows("focus") { focus }
         }
         .formStyle(.grouped)
+    }
+
+    private func shows(_ id: String) -> Bool { page == nil || page == id }
+
+    private var battery: some View {
+        Section("Battery") {
+            Toggle("Charger connected and disconnected", isOn: $prefs.chargingNotification)
+            Toggle("Charging live activity", isOn: $prefs.chargingActivity)
+            Toggle("Low battery warning", isOn: $prefs.lowBatteryNotification)
+            Picker("Warn at", selection: $prefs.lowBatteryThreshold) {
+                ForEach([0.1, 0.15, 0.2, 0.25, 0.3], id: \.self) { Text("\(Int($0 * 100))%").tag($0) }
+            }
+            .disabled(!prefs.lowBatteryNotification)
+            Toggle("Low battery sound", isOn: $prefs.lowBatterySound)
+                .disabled(!prefs.lowBatteryNotification)
+            Toggle("Low Power Mode", isOn: $prefs.lowPowerNotification)
+        }
+    }
+
+    private var connectivity: some View {
+        Section("Connectivity") {
+            Toggle("Device connected and disconnected", isOn: $prefs.bluetoothNotification)
+            Toggle("Include keyboards, mice and other devices", isOn: $prefs.bluetoothAllDevices)
+            Toggle("Low battery warning for devices", isOn: $prefs.deviceLowBattery)
+            Toggle("Low battery sound for devices", isOn: $prefs.deviceLowBatterySound)
+                .disabled(!prefs.deviceLowBattery)
+        }
+    }
+
+    private var focus: some View {
+        Section {
+            Toggle("Focus changes", isOn: $prefs.focusNotification)
+            Toggle("Focus live activity", isOn: $prefs.focusActivity)
+            Toggle("Sound when Sleep turns on", isOn: $prefs.sleepFocusSound)
+            PermissionRow(permission: .focus)
+            PermissionRow(permission: .fullDiskAccess)
+        } header: {
+            Text("Focus")
+        } footer: {
+            Text("Without Full Disk Access, Isola can only tell that a Focus is on, not which one.")
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 

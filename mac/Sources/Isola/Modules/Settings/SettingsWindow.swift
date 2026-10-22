@@ -22,24 +22,55 @@ struct SettingsPage: Identifiable {
     let title: String
     let symbol: String
     let tint: Color
+    /// Sidebar group ("notifications", "liveActivities"); nil for none.
+    var group: String?
+    /// Not released yet: a "Soon" row that can't be selected and has no page.
+    var soon = false
     let view: () -> AnyView
 }
 
 @MainActor
 enum SettingsPages {
     private static let tints: [Color] = [.pink, .purple, .indigo, .teal, .orange, .mint, .cyan, .brown]
+    private static let groupTitles = ["notifications": "Notifications", "liveActivities": "Live Activities"]
 
     static func all(nav: SettingsNav) -> [SettingsPage] {
         let modules = SettingsRegistry.sections.enumerated().map { i, s in
-            SettingsPage(id: s.id, title: s.title, symbol: s.symbol, tint: tints[i % tints.count], view: s.view)
+            SettingsPage(id: s.id, title: s.title, symbol: s.symbol, tint: tints[i % tints.count], group: s.group, view: s.view)
         }
-        return [
+        var pages = [
             SettingsPage(id: "general", title: "General", symbol: "gearshape.fill", tint: .gray) { AnyView(GeneralPage(nav: nav)) },
             SettingsPage(id: "island", title: "Island", symbol: "capsule.fill", tint: .blue) { AnyView(IslandPage()) },
         ] + modules + [
             SettingsPage(id: "license", title: "License", symbol: "checkmark.seal.fill", tint: .green) { AnyView(LicensePage()) },
             SettingsPage(id: "about", title: "About", symbol: "info.circle.fill", tint: .gray) { AnyView(AboutPage()) },
         ]
+        let fileTray = SettingsPage(id: "fileTray", title: "File Tray", symbol: "tray.full.fill", tint: .gray, soon: true) { AnyView(EmptyView()) }
+        pages.insert(fileTray, at: pages.firstIndex { $0.id == "lockscreen" }.map { $0 + 1 } ?? pages.count - 2)
+        return pages
+    }
+
+    /// Sidebar sections: the ungrouped pages up to the first group, each group under its title
+    /// (in order of its first page), then every other ungrouped page.
+    static func sections(_ pages: [SettingsPage]) -> [(title: String?, pages: [SettingsPage])] {
+        let head = Array(pages.prefix { $0.group == nil })
+        var groups: [String] = []
+        for case let group? in pages.map(\.group) where !groups.contains(group) { groups.append(group) }
+        let grouped = groups.map { group in (title: Optional(groupTitles[group] ?? group), pages: pages.filter { $0.group == group }) }
+        let rest = pages.dropFirst(head.count).filter { $0.group == nil }
+        return [(nil, head)] + grouped + (rest.isEmpty ? [] : [(nil, rest)])
+    }
+}
+
+/// The small "Soon" capsule on a sidebar row that isn't out yet.
+struct SoonBadge: View {
+    var body: some View {
+        Text("Soon")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(.quaternary))
     }
 }
 
@@ -62,15 +93,16 @@ struct SettingsRootView: View {
 
     var body: some View {
         let pages = SettingsPages.all(nav: nav)
-        let current = pages.first { $0.id == nav.selection } ?? pages[0]
+        let current = pages.first { $0.id == nav.selection && !$0.soon } ?? pages[0]
         NavigationSplitView {
-            List(pages, selection: $nav.selection) { page in
-                Label {
-                    Text(page.title)
-                } icon: {
-                    SidebarIcon(symbol: page.symbol, tint: page.tint)
+            List(selection: $nav.selection) {
+                ForEach(Array(SettingsPages.sections(pages).enumerated()), id: \.offset) { _, section in
+                    Section {
+                        ForEach(section.pages) { row($0) }
+                    } header: {
+                        if let title = section.title { Text(title) }
+                    }
                 }
-                .tag(page.id)
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 196, max: 240)
         } detail: {
@@ -78,6 +110,22 @@ struct SettingsRootView: View {
                 .navigationTitle(current.title)
         }
         .frame(minWidth: 680, minHeight: 520)
+    }
+
+    private func row(_ page: SettingsPage) -> some View {
+        Label {
+            HStack {
+                Text(page.title)
+                if page.soon {
+                    Spacer()
+                    SoonBadge()
+                }
+            }
+        } icon: {
+            SidebarIcon(symbol: page.symbol, tint: page.tint)
+        }
+        .tag(page.id)
+        .selectionDisabled(page.soon)
     }
 }
 
@@ -199,7 +247,16 @@ struct GeneralPage: View {
                     if sync.enabled { Text(sync.status) }
                 }
             } footer: {
-                Text("Turning it on applies the settings already in iCloud Drive, if there are any. The license, display choice, fine tuning, hidden calendars, dismissed events and live waveform stay on this Mac.")
+                Text("Turning it on applies the settings already in iCloud Drive, if there are any. The license, display choice, fine tuning, menu bar icon, hidden calendars, dismissed events and live waveform stay on this Mac.")
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Section {
+                Toggle("Hide menu bar icon", isOn: $prefs.hideMenuBarIcon)
+            } header: {
+                Text("Menu bar")
+            } footer: {
+                Text("With the icon hidden, open Isola again from Finder or Spotlight to bring back these settings.")
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -254,6 +311,10 @@ struct GeneralPage: View {
                 Picker("Outline", selection: $prefs.outline) {
                     ForEach(OutlineStyle.allCases) { Text($0.title).tag($0) }
                 }
+                Toggle(isOn: $prefs.progressiveBlur) {
+                    Text("Progressive blur")
+                    Text("The open island and scrolling titles soften into their edges instead of stopping at them.")
+                }
             } header: {
                 Text("Appearance")
             } footer: {
@@ -266,8 +327,21 @@ struct GeneralPage: View {
     }
 }
 
+extension IdleActivity {
+    var title: String {
+        switch self {
+        case .none: "None"
+        case .calendar: "Calendar"
+        case .nowPlaying: "Now Playing"
+        case .duo: "Player and Calendar"
+        case .mostRecent: "Most Recent"
+        }
+    }
+}
+
 struct IslandPage: View {
     @Bindable var prefs = Preferences.shared
+    @Bindable var system = SystemPreferences.shared
     private static let hoverDelays: [Double] = [0, 0.3, 0.5, 0.8, 1.2]
 
     var body: some View {
@@ -291,7 +365,49 @@ struct IslandPage: View {
                             .frame(width: 40, alignment: .trailing)
                     }
                 }
+                Toggle(isOn: $prefs.haptics) {
+                    Text("Haptic feedback")
+                    Text("The trackpad taps as the island lifts, opens, closes and takes a swipe.")
+                }
+            }
+            Section("Gestures") {
                 Toggle("Natural swipe direction", isOn: $prefs.naturalSwipe)
+                Toggle(isOn: $prefs.swipeToToggle) {
+                    Text("Swipe to open and close")
+                    Text("Swipe down to open the island, up to close it.")
+                }
+                Toggle(isOn: $prefs.swipeToSkip) {
+                    Text("Swipe to skip media")
+                    Text("Swipe sideways on the player for the next or previous track.")
+                }
+                Toggle(isOn: $prefs.swipeToDismiss) {
+                    Text("Swipe up to dismiss activity")
+                    Text("Hides a compact activity until it has something new to show.")
+                }
+                Toggle(isOn: $prefs.swipeToCycle) {
+                    Text("Swipe down to cycle activities")
+                    Text("With the island open, swipe down for the next activity. A middle click always does.")
+                }
+                Toggle(isOn: $prefs.useAccentColor) {
+                    Text("Use accent color")
+                    Text("Hovering and pressing light up the island’s edge in your accent color, and so do the Compact and Contrast outlines.")
+                }
+            }
+            Section {
+                Picker("Activity", selection: $prefs.idleActivity) {
+                    ForEach(IdleActivity.allCases) { Text($0.title).tag($0) }
+                }
+                Toggle(isOn: $prefs.forceIdleActivity) {
+                    Text("Keep it in the island")
+                    Text("Shows it in the compact island whenever nothing else is running, on displays without a notch too.")
+                }
+                .disabled(prefs.idleActivity == .none)
+            } header: {
+                Text("Idle Activity")
+            } footer: {
+                Text("With nothing running, a click, Expand on hover or a swipe down opens it. Most Recent opens the last activity that ended.")
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             Section("Activities") {
                 Toggle(isOn: $prefs.duo) {
@@ -313,6 +429,7 @@ struct IslandPage: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             Section("Sounds") {
+                Toggle("Lock live activity", isOn: $system.lockActivity)
                 Toggle("Play a sound on unlock", isOn: $prefs.unlockSound)
                 Toggle("Play a sound on lock", isOn: $prefs.lockSound)
             }
@@ -341,14 +458,22 @@ struct AboutPage: View {
                 .glassButton()
                 .padding(.top, 4)
             Spacer()
-            Text("On macOS 26 or later you can hide the menu bar icon from System Settings › Menu Bar.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-                .padding(.bottom, 20)
+            feedback.padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var feedback: some View {
+        VStack(spacing: 6) {
+            Text("Feedback").font(.headline)
+            Text("Report a bug, suggest a feature or share anything else.").foregroundStyle(.secondary)
+            Button("Send Feedback…") { Feedback.send() }
+                .glassButton()
+                .padding(.top, 2)
+            Text("Usually answered within 48 hours").font(.footnote).foregroundStyle(.tertiary)
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 40)
     }
 
     @ViewBuilder private var links: some View {
@@ -371,6 +496,30 @@ struct AboutPage: View {
                 Link("FAQs", destination: website.appendingPathComponent("faqs"))
             }
         }
+    }
+}
+
+/// Feedback by e-mail, with this build and macOS filled in (About › Send Feedback…, and the menu bar menu).
+@MainActor
+enum Feedback {
+    /// The website's contact address (CONTACT_EMAIL in src/config.ts).
+    static let address = "hello@example.com"
+
+    static func send() {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "dev", build = info?["CFBundleVersion"] as? String ?? "0"
+        if let url = mail(version: version, build: build, system: ProcessInfo.processInfo.operatingSystemVersionString) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// mailto: with a subject and a body that ends in the version line, every character outside
+    /// ASCII letters, digits and -._~ percent-encoded.
+    static func mail(version: String, build: String, system: String) -> URL? {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+        func encode(_ text: String) -> String { text.addingPercentEncoding(withAllowedCharacters: allowed) ?? "" }
+        let body = "\n\n—\nIsola \(version) (\(build)) · macOS \(system)"
+        return URL(string: "mailto:\(address)?subject=\(encode("Isola feedback"))&body=\(encode(body))")
     }
 }
 

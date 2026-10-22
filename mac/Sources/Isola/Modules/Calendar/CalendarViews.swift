@@ -478,7 +478,6 @@ struct CalendarSettingsView: View {
             Section {
                 Toggle("Show upcoming events in the island", isOn: $prefs.liveActivity)
                 Stepper("Appear \(prefs.leadMinutes) minutes before they start", value: $prefs.leadMinutes, in: 1...60)
-                Toggle("Show the date when nothing else is running", isOn: $prefs.idleActivity)
                 Toggle("Time to leave alerts for events with a location", isOn: $prefs.timeToLeave)
                 Group {
                     Picker("Travel by", selection: $prefs.travelMode) {

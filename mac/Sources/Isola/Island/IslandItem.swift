@@ -30,6 +30,8 @@ struct IslandItem: Identifiable {
     /// What the activity shows (e.g. the track). Swiped away, it stays hidden until it
     /// starts or updates with a different key, or ends.
     var contentKey: String?
+    /// Right-click or Control-click menu, built when it opens (same entries as the menu bar menu).
+    var contextMenu: (() -> [MenuEntry])?
     var startedAt = Date()
 
     init<L: View, T: View>(
@@ -89,6 +91,12 @@ struct IslandItem: Identifiable {
     func contentKey(_ key: String?) -> IslandItem {
         var copy = self
         copy.contentKey = key
+        return copy
+    }
+
+    func contextMenu(_ entries: @escaping () -> [MenuEntry]) -> IslandItem {
+        var copy = self
+        copy.contextMenu = entries
         return copy
     }
 }

@@ -4,7 +4,8 @@ import SwiftUI
 /// Borderless panel at the top of a screen that hosts the island. It is larger than
 /// the island (room to expand) and lets clicks through everywhere except the island.
 final class IslandPanel: NSPanel {
-    static let envelope = CGSize(width: 720, height: 300)
+    /// Room for the widest panel (the Idle Activity's player and calendar side by side).
+    static let envelope = CGSize(width: 840, height: 300)
     let screenID: CGDirectDisplayID
     private(set) var geometry: NotchGeometry
 
@@ -76,8 +77,8 @@ extension NSScreen {
     var isBuiltIn: Bool { CGDisplayIsBuiltin(displayID) != 0 }
 }
 
-/// Owns one panel per target screen and routes the mouse: hover, press, click,
-/// two-finger swipes, middle click and click-outside-to-collapse.
+/// Owns one panel per target screen and routes the mouse: hover, press, click, right-click
+/// menus, two-finger swipes, middle click and click-outside-to-collapse.
 @MainActor
 final class IslandWindows {
     static let shared = IslandWindows()
@@ -153,33 +154,56 @@ final class IslandWindows {
                 }
             }
         } as Any)
-        monitors.append(NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .otherMouseDown, .scrollWheel]) { e in
-            MainActor.assumeIsolated { IslandWindows.shared.handle(e) }
+        monitors.append(NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown, .scrollWheel]) { e in
+            // Delivered on the main thread; the event never leaves it.
+            nonisolated(unsafe) let event = e
+            return MainActor.assumeIsolated { IslandWindows.shared.handle(event) } ? nil : e
         } as Any)
     }
 
-    private func handle(_ e: NSEvent) -> NSEvent? {
+    /// True when the event was used up (a menu opened for it).
+    private func handle(_ e: NSEvent) -> Bool {
         let location = NSEvent.mouseLocation
-        guard let panel = panel(at: location) else { return e }
+        guard let panel = panel(at: location) else { return false }
         let island = Island.shared
         if panel.bubbleRect().contains(location) {
             if e.type == .leftMouseUp { island.swapDuo() }
-            return e
+            return false
         }
+        // Control-click is a right click: it opens the menu, never the panel.
+        let control = e.modifierFlags.contains(.control)
         switch e.type {
+        case .rightMouseDown:
+            return showContextMenu(at: location)
+        case .leftMouseDown where control:
+            return showContextMenu(at: location)
         case .leftMouseDown:
             island.setPressed(true)
         case .leftMouseUp:
             island.setPressed(false)
             // Controls inside the expanded panel handle their own clicks.
-            if !island.expanded { island.tap(option: e.modifierFlags.contains(.option)) }
+            if !island.expanded, !control { island.tap(option: e.modifierFlags.contains(.option)) }
         case .otherMouseDown where e.buttonNumber == 2:
             island.cycle()
         case .scrollWheel:
             handleScroll(e)
         default: break
         }
-        return e
+        return false
+    }
+
+    /// The shown item's context menu at `location` (screen coordinates); false when it has none.
+    @discardableResult func showContextMenu(at location: NSPoint) -> Bool {
+        let island = Island.shared
+        guard let entries = island.current?.contextMenu?(), !entries.isEmpty else { return false }
+        island.quickPeek(false)
+        island.setPressed(false)
+        let menu = NSMenu()
+        for entry in entries { menu.addItem(StatusItem.item(for: entry)) }
+        menu.popUp(positioning: nil, at: location, in: nil)
+        // The pointer may have left the island while the menu was open.
+        updatePointer()
+        return true
     }
 
     /// The way the fingers moved, whatever the system scroll direction: natural scrolling

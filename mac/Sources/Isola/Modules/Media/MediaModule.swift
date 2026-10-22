@@ -286,7 +286,7 @@ enum MediaModule {
     }
 
     static func registerSettings() {
-        SettingsRegistry.add("media", title: "Media", symbol: "music.note", order: 20) { MediaSettingsView() }
+        SettingsRegistry.add("media", title: "Media", symbol: "music.note", order: 20, group: "liveActivities") { MediaSettingsView() }
     }
 
     private static func registerDebug() {

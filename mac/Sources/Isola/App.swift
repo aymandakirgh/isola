@@ -29,4 +29,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Modules.start()
         }
     }
+
+    /// Opening Isola again (Finder, Spotlight) shows Settings: the way back with the menu bar icon hidden.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        MainActor.assumeIsolated { SettingsWindow.show() }
+        return false
+    }
 }

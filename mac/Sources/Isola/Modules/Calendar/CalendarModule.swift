@@ -72,7 +72,7 @@ enum CalendarModule {
     }
 
     static func registerSettings() {
-        SettingsRegistry.add("calendar", title: "Calendar & Weather", symbol: "calendar", order: 50) { CalendarSettingsView() }
+        SettingsRegistry.add("calendar", title: "Calendar & Weather", symbol: "calendar", order: 50, group: "liveActivities") { CalendarSettingsView() }
     }
 
     static func updateIdleActivity() {

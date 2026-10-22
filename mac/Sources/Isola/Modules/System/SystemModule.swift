@@ -17,7 +17,11 @@ enum SystemModule {
     }
 
     static func registerSettings() {
-        SettingsRegistry.add("live", title: "Live Activities", symbol: "bolt.badge.clock", order: 30) { SystemSettingsView() }
+        SettingsRegistry.add("battery", title: "Battery", symbol: "battery.100percent", order: 11, group: "notifications") { SystemSettingsView(page: "battery") }
+        SettingsRegistry.add("connectivity", title: "Connectivity", symbol: "dot.radiowaves.left.and.right", order: 12, group: "notifications") {
+            SystemSettingsView(page: "connectivity")
+        }
+        SettingsRegistry.add("focus", title: "Focus", symbol: "moon.fill", order: 13, group: "notifications") { SystemSettingsView(page: "focus") }
     }
 
     /// IOBluetooth blocks the main thread on the permission prompt while access is undecided,

@@ -104,23 +104,34 @@ struct IslandBody: View {
     let radii: (top: CGFloat, bottom: CGFloat)
     let geometry: NotchGeometry
     var outline: OutlineStyle = .none
+    /// "Use accent color": hover, press and the Compact and Contrast outlines take it instead of white.
+    var accent: Color?
+    /// General › Progressive blur; nil follows the setting (gallery shots pin it).
+    var blur: Bool?
 
     var body: some View {
         let g = geometry
+        let shape = IslandShape(top: radii.top, bottom: radii.bottom)
         ZStack(alignment: .top) {
             IslandFill(top: radii.top, bottom: radii.bottom, ears: g.attached ? g.height * 0.2 : 0)
                 .fill(Color.black)
             content
                 .frame(width: size.width, height: size.height, alignment: .top)
-                .clipShape(IslandShape(top: radii.top, bottom: radii.bottom))
-            IslandOutline(style: outline, item: state.item, shape: IslandShape(top: radii.top, bottom: radii.bottom), compact: !state.expanded)
-                // Flush with the top edge, the outline fades out where the island meets the bezel.
-                .mask(TopFade(length: g.attached ? g.height * 0.4 : 0))
+                .clipShape(shape)
+            Group {
+                IslandOutline(style: outline, item: state.item, shape: shape, compact: !state.expanded, tint: accent)
+                // Hovered or pressed, the edge lights up in the accent colour.
+                if let accent, !state.expanded, state.pressed || (state.hovering && !state.peeking) {
+                    shape.strokeBorder(accent.opacity(0.85), lineWidth: 1.25).transition(.opacity)
+                }
+            }
+            // Flush with the top edge, the outline fades out where the island meets the bezel.
+            .mask(TopFade(length: g.attached ? g.height * 0.4 : 0))
         }
         .frame(width: size.width, height: size.height)
         .overlay(alignment: .topTrailing) {
             if let second = state.secondary, !state.expanded {
-                DuoBubble(item: second, geometry: g, outline: outline)
+                DuoBubble(item: second, geometry: g, outline: outline, tint: accent)
                     .offset(x: g.bubbleGap + g.bubble, y: g.bubbleInset)
                     .transition(.scale(scale: 0.4, anchor: .leading).combined(with: .opacity))
             }
@@ -134,8 +145,9 @@ struct IslandBody: View {
         if state.expanded, let item = state.item, let expanded = item.expanded {
             expanded
                 .frame(width: size.width, height: size.height, alignment: .top)
-                // While the panel springs open (or holds more than fits) its content blurs into the bottom edge.
-                .progressiveBlur(radius: 5, sharp: BottomRamp(length: 10), blurred: BottomRamp(length: 10, reversed: true))
+                // While the panel springs open (or holds more than fits) its content blurs into the bottom
+                // edge; with the blur off it is simply cut there.
+                .progressiveBlur(blur ?? Preferences.shared.progressiveBlur, radius: 5, sharp: BottomRamp(length: 10), blurred: BottomRamp(length: 10, reversed: true))
                 .id("expanded-\(item.id)")
                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)).animation(.easeOut(duration: 0.25)))
         } else {
@@ -170,11 +182,14 @@ struct IslandBody: View {
 /// General › Outline, stroked just inside the island's own animated shape so it follows
 /// every spring: Colored takes the activity's accent, Compact is a hairline that leaves while
 /// expanded, Contrast is a brighter edge that lifts the black island off dark wallpapers.
+/// Compact and Contrast are white, or the system accent colour with "Use accent color" on.
 struct IslandOutline<S: InsettableShape>: View {
     let style: OutlineStyle
     let item: IslandItem?
     let shape: S
     var compact = true
+    /// The accent colour, or nil for white (a colour needs more opacity than white to show on black).
+    var tint: Color?
 
     var body: some View {
         switch style {
@@ -183,9 +198,10 @@ struct IslandOutline<S: InsettableShape>: View {
         case .colored:
             shape.strokeBorder(LinearGradient(colors: accent, startPoint: .top, endPoint: .bottom), lineWidth: 1.25)
         case .compact:
-            shape.strokeBorder(Color.white.opacity(0.32), lineWidth: 0.5).opacity(compact ? 1 : 0)
+            shape.strokeBorder(tint?.opacity(0.6) ?? .white.opacity(0.32), lineWidth: 0.5).opacity(compact ? 1 : 0)
         case .contrast:
-            shape.strokeBorder(LinearGradient(colors: [.white.opacity(0.6), .white.opacity(0.38)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+            let colors = tint.map { [$0.opacity(0.95), $0.opacity(0.7)] } ?? [.white.opacity(0.6), .white.opacity(0.38)]
+            shape.strokeBorder(LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom), lineWidth: 1)
         }
     }
 
@@ -224,6 +240,7 @@ struct DuoBubble: View {
     let item: IslandItem
     let geometry: NotchGeometry
     var outline: OutlineStyle = .none
+    var tint: Color?
 
     var body: some View {
         let d = geometry.bubble
@@ -234,7 +251,7 @@ struct DuoBubble: View {
                 .offset(x: -5)
                 .id("bubble-\(item.id)")
                 .transition(.islandWing)
-            IslandOutline(style: outline, item: item, shape: Circle())
+            IslandOutline(style: outline, item: item, shape: Circle(), tint: tint)
         }
         .frame(width: d, height: d)
         .clipShape(Circle())
@@ -250,7 +267,9 @@ struct IslandView: View {
         let g = geometry
         let visible = island.visible(in: g)
         let lift = island.hovering && !island.peeking && !island.expanded
-        IslandBody(state: island.state, size: island.size(in: g), radii: island.radii(in: g), geometry: g, outline: Preferences.shared.outline)
+        let p = Preferences.shared
+        IslandBody(state: island.state, size: island.size(in: g), radii: island.radii(in: g), geometry: g, outline: p.outline,
+                   accent: p.useAccentColor ? Color(nsColor: .controlAccentColor) : nil)
             .scaleEffect(island.pressed ? 0.94 : lift ? 1.075 : 1, anchor: .top)
             .shadow(color: .black.opacity(lift ? 0.25 : 0), radius: 8, y: 2)
             .opacity(visible ? 1 : 0)
