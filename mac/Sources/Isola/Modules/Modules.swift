@@ -38,6 +38,7 @@ enum IdleActivities {
         Island.shared.idleItem = { item(Preferences.shared.idleActivity, lastEnded: Island.shared.lastEnded) }
         Island.shared.idleKept = { Preferences.shared.forceIdleActivity }
         // Calendar's "Show the date when nothing else is running" became Idle Activity › Calendar, kept in the island.
+        // Its key stays off for good: it no longer syncs, so the old date activity can't come back.
         let calendar = CalendarPreferences.shared
         if calendar.idleActivity {
             Preferences.shared.idleActivity = .calendar

@@ -247,7 +247,7 @@ struct GeneralPage: View {
                     if sync.enabled { Text(sync.status) }
                 }
             } footer: {
-                Text("Turning it on applies the settings already in iCloud Drive, if there are any. The license, display choice, fine tuning, menu bar icon, hidden calendars, dismissed events and live waveform stay on this Mac.")
+                Text("Turning it on applies any settings already in iCloud Drive. The license, display choice, fine tuning, menu bar icon, hidden calendars, dismissed events, live waveform and media source stay on this Mac.")
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

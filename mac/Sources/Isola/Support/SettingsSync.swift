@@ -189,7 +189,8 @@ final class SettingsSync {
     /// this Mac: license and device ID, onboarding, update checks, window and menu bar
     /// positions, the chosen display and notch fine tuning (this Mac's hardware), hidden
     /// calendars and dismissed events (this Mac's EventKit IDs), the live waveform (it would
-    /// ask every Mac for System Audio Recording) and this sync's own state.
+    /// ask every Mac for System Audio Recording), the media source (it would ask every Mac for
+    /// Automation) and this sync's own state.
     static let live: [String: (Any) -> Void] = {
         let core = Preferences.shared, media = MediaPreferences.shared, system = SystemPreferences.shared
         let hud = HUDPreferences.shared, calendar = CalendarPreferences.shared, lock = LockScreenPreferences.shared
@@ -236,6 +237,14 @@ final class SettingsSync {
             "media.gradientProgress": bind(media, \.gradientProgress),
             "media.showTotalTime": bind(media, \.showTotalTime),
             "media.keepVolumeOpen": bind(media, \.keepVolumeOpen),
+            "media.artworkFlip": bind(media, \.artworkFlip),
+            "media.colorStyle": bindRaw(media, \.colorStyle),
+            "media.titleBadge": bindRaw(media, \.titleBadge),
+            "media.leftControl": bindRaw(media, \.leftControl),
+            "media.rightControl": bindRaw(media, \.rightControl),
+            "media.peekOnChange": bind(media, \.peekOnChange),
+            "media.peekDuration": bind(media, \.peekDuration),
+            "media.hideWhileSourceActive": bind(media, \.hideWhileSourceActive),
 
             "system.chargingNotification": bind(system, \.chargingNotification),
             "system.chargingActivity": bind(system, \.chargingActivity),
@@ -286,7 +295,6 @@ final class SettingsSync {
             "calendar.splitAllDay": bind(calendar, \.splitAllDay),
             "calendar.lunar": bind(calendar, \.lunar),
             "calendar.openWith": bind(calendar, \.openWith),
-            "calendar.idleActivity": bind(calendar, \.idleActivity),
             "calendar.hideDuringEvents": bind(calendar, \.hideDuringEvents),
             "calendar.peekTiming": bindRaw(calendar, \.peekTiming),
             "calendar.peekDuration": bind(calendar, \.peekDuration),
@@ -312,7 +320,8 @@ final class SettingsSync {
             "lockscreen.showConnectivity": bind(lock, \.showConnectivity),
             "lockscreen.showCalendar": bind(lock, \.showCalendar),
             "lockscreen.nowPlayingStyle": bindRaw(lock, \.nowPlayingStyle),
-            "lockscreen.weatherStyle": bindRaw(lock, \.weatherStyle),
+            // "detailed", from before the weather styles, reads as Precipitation (as it does at launch).
+            "lockscreen.weatherStyle": { if let raw = $0 as? String { lock.weatherStyle = WeatherWidgetStyle(stored: raw) } },
             "lockscreen.nowPlayingOffset": bind(lock, \.nowPlayingOffset),
             "lockscreen.hideWhileInactive": bind(lock, \.hideWhileInactive),
             "lockscreen.hideInstantly": bind(lock, \.hideInstantly),
@@ -427,10 +436,12 @@ final class SettingsSync {
     /// Runs with the gallery (`Isola --gallery`): Macs A, B and C merging through one file, all in memory.
     static func selfCheck() {
         let t = Date(timeIntervalSinceReferenceDate: 800_000_000)
-        // A turns sync on first; its license, onboarding, dismissed events and display stay home.
+        // A turns sync on first; its license, onboarding, dismissed events, display, media source and the
+        // retired "Show the date" toggle stay home.
         var macA: [String: Any] = [
             "duo": false, "hud.volume.style": "white", "media.spectrogram": true,
             "license.key": "ISOLA-AAAA", "onboarded": true, "calendar.dismissed": ["event-1"], "preferredDisplay": "LG UltraFine",
+            "media.source": "spotify", "calendar.idleActivity": true,
         ]
         var ledgerA: [String: Entry] = [:]
         stamp(&ledgerA, values: macA, date: .distantPast, mac: "A")
