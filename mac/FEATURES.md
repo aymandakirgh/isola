@@ -9,9 +9,9 @@ Every line of the reference app's public changelog (165 items, versions 1.0–1.
 - **Missing**: not implemented. **Blocked**: needs something this project can't have (Apple entitlements or notarization, a third-party account, hardware).
 - **N/A**: a line about the reference product's own history rather than a capability.
 
-**165 items:** ✅ Done 139 · 🔶 Built, unverified 22 · 🟡 Partial 2 · ⛔ Blocked 2
+**165 items:** ✅ Done 144 · 🔶 Built, unverified 18 · 🟡 Partial 1 · ⛔ Blocked 2
 
-**Seen live:** 65 of them were exercised on the test Mac (✓ column), with real system data or with simulated input through the same code path (`isolactl`). The rest were checked by reading the code and by the offscreen `--gallery` self-checks.
+**Seen live:** 69 of them were exercised on the test Mac (✓ column), with real system data or with simulated input through the same code path (`isolactl`). The rest were checked by reading the code and by the offscreen `--gallery` self-checks.
 
 Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1 Pro, clamshell, one 2560×1440 display, macOS 27) with `isolactl` and `scripts/tour.sh`; permission-gated paths (system audio capture, location, Bluetooth, calendars) were not triggered on that shared machine.
 
@@ -75,7 +75,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 49 | Added HomePod support | 🔶 Built, unverified |  | `Sources/Isola/Modules/HUD/HUDModule.swift:84` | HomePod recognised by name or CoreAudio model (AudioAccessoryN,N) for AirPlay outputs; no HomePod on the test Mac. |
 | 50 | Added AirPods Max Red support | 🔶 Built, unverified |  | `Sources/Isola/Modules/System/Bluetooth.swift:236` | Code 0x02, labelled "Red" for AirPods Max in Flipper's table, tints rose. Likely the gen-1 Pink finish; no hardware to confirm. |
 | 51 | Added AirPods Pro 3 support | ✅ Done | ✓ | `Sources/Isola/Modules/System/Bluetooth.swift:187-188` | AirPods Pro 3 (0x2027/0x2028); this macOS has no Pro 3 symbol, so it uses airpods.pro. |
-| 52 | Added copy link support to YouTube Music | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:624` | YouTube Music tab URL via the browser's AppleScript, only with Automation consent; not run on the test Mac. |
+| 52 | Added copy link support to YouTube Music | ✅ Done |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:690-698` | Same browser path as YouTube, seen live in Chrome; a YouTube Music tab is picked by its host (self-checked). |
 | 53 | Restored HUD mute functionality | ✅ Done | ✓ | `Sources/Isola/Modules/HUD/HUDModule.swift:209-214; Sources/Isola/Modules/HUD/HUDControls.swift:93; Sources/Isola/Modules/HUD/HUDViews.swift:27-28` | The mute key toggles mute, and mute changes from elsewhere are caught too. The HUD shows a crossed-out speaker and "Muted". |
 | 54 | Added click on todays date to open calendar | ✅ Done |  | `Sources/Isola/Modules/Calendar/CalendarViews.swift:325-326` | Today's cell in the week strip is a button that opens the chosen calendar app. |
 | 55 | Added expanded calendar | ✅ Done | ✓ | `Sources/Isola/Modules/Calendar/CalendarViews.swift:227-309,25,51,71` | Month, week strip, agenda, weather and timers. Reachable only with an upcoming event, a running timer, or the idle-date setting on. |
@@ -89,7 +89,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 58 | Added opt click support to alternate between activity actions | ✅ Done | ✓ | `Sources/Isola/Modules/System/Power.swift:172; Sources/Isola/Modules/System/Focus.swift:182` | Option-click on charging switches between time to full and "46% · 96 W adapter"; on Focus it opens Focus settings. |
 | 59 | Reworked the app to fully match Tahoe style | ✅ Done | ✓ | `Sources/Isola/Modules/Settings/SettingsWindow.swift:176; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:364` | Built with the macOS 27 SDK: Settings and widgets take the Tahoe design, plus Liquid Glass on custom surfaces; seen live on macOS 27. |
 | 60 | Added multiple live activity support | ✅ Done | ✓ | `Sources/Isola/Island/Island.swift:10,24-31,73-76; Sources/Isola/Island/IslandWindows.swift:159-160` | Priority-sorted activity list; swipe down while expanded or middle click cycles. |
-| 61 | Added Dia browser support | 🟡 Partial |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:536` | Dia is activated only: as of mid-2025 it had no AppleScript dictionary. Not installed here to recheck. |
+| 61 | Added Dia browser support | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:598-660` | Dia 1.5x ships an AppleScript dictionary (windows › tabs with title, URL, isFocused; focus): copy link and Show in Browser script it like Chrome. Installed on the test Mac, not yet set up to play a video. |
 | 62 | Added sleep focus sound option | 🔶 Built, unverified |  | `Sources/Isola/Modules/System/Focus.swift:57` | Soft sound when Sleep turns on (off by default); telling Sleep apart needs Full Disk Access. |
 | 63 | Added show on screensaver option | ✅ Done |  | `lockscreen.showOnScreensaver; Sources/Isola/Modules/LockScreen/LockScreenModule.swift:15-16,59-62` | Screensaver start/stop distributed notifications present widgets on the SkyLight lock space. |
 | 64 | Added time to empty for battery widget | ✅ Done |  | `Sources/Isola/Modules/System/Power.swift:54; Sources/Isola/Modules/LockScreen/LockScreenWidgets.swift:412-414` | IOKit kIOPSTimeToEmptyKey shown as "Xh Ym left" while discharging. |
@@ -148,12 +148,12 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | # | Feature | Status | Seen live | Evidence | Note |
 |---|---|---|---|---|---|
 | 104 | Added artwork glare effect | ✅ Done |  | `Sources/Isola/Modules/Media/MediaViews.swift:29` | Glare on wing and player artwork, follows the pointer via a tracking area, on by default. Pointer-follow not run live. |
-| 105 | Added show in browser menu option | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:204` | Brings the playing tab to the front when Automation is granted; otherwise activates the app. |
-| 106 | Added copy link support for YouTube | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:536` | YouTube tab picked by host + title (self-checked); browser scripts not run without consent. |
+| 105 | Added show in browser menu option | ✅ Done | ✓ | `Sources/Isola/Modules/Media/NowPlayingSources.swift:650-665` | Seen live: with another Chrome tab in front, Show in Browser selected the YouTube tab playing and raised Chrome. |
+| 106 | Added copy link support for YouTube | ✅ Done | ✓ | `Sources/Isola/Modules/Media/NowPlayingSources.swift:690-698` | Seen live: Copy Link put https://www.youtube.com/watch?v=… of the playing Chrome tab on the clipboard. |
 | 107 | Added ability to remove other devices | ✅ Done | ✓ | `api/license.ts; Sources/Isola/Modules/Settings/License.swift` | Real licence server (Vercel Functions + Blob): removing another Mac works; seen live, the removed Mac drops to trial on its next sync. |
 | 108 | Improved device recognition support | ✅ Done |  | `Sources/Isola/Modules/System/Bluetooth.swift:137,265; Sources/Isola/Modules/HUD/HUDControls.swift:65` | 33-model table (AirPods + 17 Beats) from AppleDB, matched to system_profiler. The HUD uses it too. |
 | 109 | Restored system media support | ✅ Done | ✓ | `Sources/Isola/Modules/Media/MediaRemoteBridge.swift:22-56; Helpers/MediaRemoteHelper.m:78-101; Sources/Isola/Modules/Media/NowPlayingSources.swift:64-68` | Perl-hosted MediaRemote helper restores system-wide now playing on macOS 15.4+ (private API). |
-| 110 | Added copy link functionality | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/NowPlayingSources.swift:179` | Copy link for Apple Music (store id), Spotify and browsers; AppleScript paths compiled, not run without consent. |
+| 110 | Added copy link functionality | ✅ Done | ✓ | `Sources/Isola/Modules/Media/NowPlayingSources.swift:560-562,690-698` | Copy link for Apple Music (store id), Spotify and browsers; the browser path seen live with YouTube in Chrome. |
 | 111 | Added Spotify podcast support | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/SpotifyWeb.swift:28,49; SharedState.swift:38-40; NowPlayingSources.swift:467` | Spotify episode → podcast: show/episode names, mic glyph, ±15/30 s skips, episode link. The AppleScript path flags episodes too. |
 | 112 | Added additional AirPods Max colors | 🟡 Partial |  | `Sources/Isola/Modules/System/Bluetooth.swift:234` | Gen-1 codes 0x00/0x02/0x03/0x0F/0x11 tinted. USB-C AirPods Max colours (Midnight, Starlight, Blue, Purple, Orange): no source names their codes, untinted. |
 | 113 | Added spectrogram style options | ✅ Done | ✓ | `Sources/Isola/Modules/Media/MediaViews.swift:136` | Bars/Mirrored/Dots/Wave share one Shape for canned and live bands. Gallery media-style-*; self-check checks bounds. |
@@ -186,7 +186,7 @@ Evidence paths are relative to `mac/`. Live checks were run on a MacBook Pro (M1
 | 140 | Added podcast support | ✅ Done | ✓ | `Sources/Isola/Modules/Media/MediaViews.swift:576` | Apple Podcasts episodes get 15 s back / 30 s forward (relative seeks) instead of previous/next. |
 | 141 | Added live stream support | ✅ Done |  | `Sources/Isola/Modules/Media/MediaViews.swift:131-135,171-177` | duration <= 0 shows a red Live badge and a mic glyph in the peek. |
 | 142 | Added support for all AirPods Max colors (gen. 1) | 🔶 Built, unverified |  | `Sources/Isola/Modules/System/Bluetooth.swift:335` | 10 s BLE scan after a Lightning AirPods Max connects; five source codes paired to five gen-1 finishes (pairing is ours). Untested on hardware. |
-| 143 | Added album tap to focus active tab | 🔶 Built, unverified |  | `Sources/Isola/Modules/Media/MediaViews.swift:371` | Album tap runs the same open-source path (tab focus needs Automation consent). |
+| 143 | Added album tap to focus active tab | ✅ Done | ✓ | `Sources/Isola/Modules/Media/NowPlayingSources.swift:650-665` | Album tap runs Show in Browser; seen live bringing the playing YouTube tab forward in Chrome. |
 | 144 | Added clamshell support | ✅ Done |  | `Sources/Isola/Island/IslandWindows.swift:81-83,95-97` | Screen-change refresh falls back to NSScreen.main when the built-in display disappears. |
 | 145 | Reworked onboarding | ✅ Done |  | `Sources/Isola/Modules/Settings/Onboarding.swift:12-13,146` | Welcome, permissions with live status, done; no Focus or Full Disk Access rows. |
 | 146 | Improved smoothness in progress slider | ✅ Done |  | `Sources/Isola/Support/SharedState.swift:40` | seek(to:) moves the bar at once, with a 1 s stale-snapshot hold (MediaModule.swift:176). Scrubber redraws at 30 fps. |
