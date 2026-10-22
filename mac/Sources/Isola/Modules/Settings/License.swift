@@ -662,9 +662,11 @@ final class Updates {
     var earlyBird = UserDefaults.standard.bool(forKey: "updates.earlyBird") {
         didSet {
             UserDefaults.standard.set(earlyBird, forKey: "updates.earlyBird")
-            // What's on offer changes now, not at the next check: automatic checks or not, a beta
-            // that Check for Updates… found goes when Early bird does.
-            if Self.current != nil { check() }
+            // What's on offer changes now, offline too: picked again from the last releases.json, so a
+            // beta Check for Updates… found goes when Early bird does. Automatic checks also look again
+            // now; without them Isola checks only when asked.
+            available = Self.offer(latest, earlyBird: earlyBird)
+            if automatic, Self.current != nil { check() }
         }
     }
     /// Remind Me Later: no island prompt until then.
@@ -672,6 +674,8 @@ final class Updates {
         didSet { UserDefaults.standard.set(snoozedUntil, forKey: "updates.snoozedUntil") }
     }
     private(set) var available: Release?
+    /// The last releases.json that decoded, which `available` is picked from.
+    @ObservationIgnored private var latest: Feed?
     private(set) var lastCheck = UserDefaults.standard.object(forKey: "updates.lastCheck") as? Date
     private(set) var failed = false
     private(set) var phase = Phase.idle
@@ -681,7 +685,7 @@ final class Updates {
     @ObservationIgnored private var download: NSKeyValueObservation?
 
     /// This build, e.g. ("1.4.7", 151); nil when running unbundled (gallery, swift run).
-    static var current: (version: String, build: Int?)? {
+    nonisolated static var current: (version: String, build: Int?)? {
         let info = Bundle.main.infoDictionary
         guard let version = info?["CFBundleShortVersionString"] as? String else { return nil }
         return (version, (info?["CFBundleVersion"] as? String).flatMap { Int($0) })
@@ -723,26 +727,34 @@ final class Updates {
 
     /// `manual` (Check for Updates…) opens the update window when there's one.
     func check(manual: Bool = false) {
-        let early = earlyBird
         URLSession.shared.dataTask(with: Self.feed) { data, response, _ in
             let ok = (response as? HTTPURLResponse)?.statusCode == 200
-            let release = ok ? data.flatMap { try? JSONDecoder().decode(Feed.self, from: $0) }?.pick(earlyBird: early) : nil
-            DispatchQueue.main.async { MainActor.assumeIsolated { Updates.shared.received(release, manual: manual) } }
+            let feed = ok ? data.flatMap { try? JSONDecoder().decode(Feed.self, from: $0) } : nil
+            DispatchQueue.main.async { MainActor.assumeIsolated { Updates.shared.received(feed, manual: manual) } }
         }.resume()
     }
 
-    private func received(_ release: Release?, manual: Bool) {
-        failed = release == nil
-        guard let release, let current = Self.current else { return }
+    /// Picked with Early bird as it is when the answer comes, not as it was when the check started.
+    private func received(_ feed: Feed?, manual: Bool) {
+        failed = feed == nil
+        guard let feed, Self.current != nil else { return }
+        latest = feed
         lastCheck = Date()
         UserDefaults.standard.set(lastCheck, forKey: "updates.lastCheck")
-        available = Self.isNewer(release.version, build: release.build, than: current.version, build: current.build) ? release : nil
+        available = Self.offer(feed, earlyBird: earlyBird)
         guard let available else { return }
         if manual {
             UpdateWindow.show(available)
         } else if !silenced, !(snoozedUntil.map { $0 > Date() } ?? false) {
             Island.shared.post(Self.prompt(available), duration: 8)
         }
+    }
+
+    /// What's on offer in `feed` with Early bird on or off: its release, when it's newer than this build.
+    static func offer(_ feed: Feed?, earlyBird: Bool, current: (version: String, build: Int?)? = Updates.current) -> Release? {
+        guard let release = feed?.pick(earlyBird: earlyBird), let current,
+              isNewer(release.version, build: release.build, than: current.version, build: current.build) else { return nil }
+        return release
     }
 
     func snooze() {
@@ -928,6 +940,9 @@ final class Updates {
         precondition(feed(both).stable.changes == Changes(features: ["Frosted"], fixes: ["Rain"], important: nil), "what's new, by section")
         precondition(feed(both.replacingOccurrences(of: #""version":"1.5""#, with: #""version":"1.4.6""#)).pick(earlyBird: true).version == "1.4.7",
                      "an older beta: the stable release")
+        // What's on offer is picked again from the last releases.json when Early bird changes: turned off, offline or not, its beta goes.
+        precondition(offer(feed(both), earlyBird: true, current: ("1.4.7", 151))?.version == "1.5" && offer(feed(both), earlyBird: false, current: ("1.4.7", 151)) == nil
+                     && offer(feed(both), earlyBird: true, current: nil) == nil, "Early bird's pick, when it's newer than this build")
         precondition(feed(#"{"version":"1.4.7","url":"https://isola-ruby.vercel.app/download","beta":{"version":"1.5"}}"#).beta == nil,
                      "a beta that doesn't decode is left out")
         precondition(!feed(today).stable.hasNotes && feed(both).stable.hasNotes && !Release(version: "1.5", url: sample.url, changes: Changes(fixes: [])).hasNotes,
