@@ -129,8 +129,9 @@ final class License {
         // which lets any Mac on the key remove one it hasn't heard from in 30 days.
         if now.timeIntervalSince(lastSync) >= 24 * 3600 { refresh() }
         // The trial ran out just now, or before this launch: the Trial Expired window, once a day at most.
+        // It's this round's reminder: no island pill on top of it.
         let expired = status == .expired
-        if expired, !wasExpired { TrialExpiredWindow.showIfDue() }
+        if expired, !wasExpired, TrialExpiredWindow.showIfDue() { lastReminder = now }
         wasExpired = expired
         // Expired trials keep working, with a gentle reminder every few hours.
         guard expired, now.timeIntervalSince(lastReminder) > 3 * 3600 else { return }
@@ -150,15 +151,15 @@ final class License {
     // MARK: - Activation
 
     /// Checks the key here, then registers this Mac with the licence server. Nothing changes until
-    /// the server says yes.
-    func activate(_ raw: String) {
+    /// the server says yes. `owner` is the License page's Name or e-mail: the forms without that
+    /// field activate without one.
+    func activate(_ raw: String, owner: String = "") {
         let candidate = Self.normalize(raw)
         guard Self.isValid(candidate) else {
             message = "That doesn’t look like an Isola license key."
             return
         }
         message = nil
-        let owner = ownerDraft
         Task { await register(candidate, owner: owner) }
     }
 
@@ -197,11 +198,14 @@ final class License {
         }
     }
 
-    /// A definite no for the key this Mac uses: back to the trial.
-    private func revoke(_ error: String) {
+    /// Back to the trial: a definite no for the key this Mac uses (`error` is the server's sentence),
+    /// or this Mac deactivated. The name it was licensed to goes with the key.
+    private func revoke(_ error: String?) {
         key = nil
         devices = []
         registered = false
+        owner = nil
+        ownerDraft = ""
         message = error
         generation += 1
         save()
@@ -240,12 +244,7 @@ final class License {
         guard let key else { return }
         if id == thisMac.id {
             if key != Self.demoKey, !pending.contains(Pending(key: key, id: id)) { pending.append(Pending(key: key, id: id)) }
-            self.key = nil
-            devices = []
-            registered = false
-            message = nil
-            generation += 1
-            save()
+            revoke(nil)
             Task { await settlePending() }
             return
         }
@@ -570,6 +569,9 @@ final class License {
         store.set("alex@example.com", forKey: "license.owner")
         let named = License(store: store)
         precondition(named.owner == "alex@example.com" && named.ownerDraft == "alex@example.com", "the owner stays in this Mac's preferences")
+        // Back to the trial (this Mac deactivated, or the server's no): the next activation starts without it.
+        named.revoke(nil)
+        precondition(named.owner == nil && named.ownerDraft.isEmpty && License(store: store).ownerDraft.isEmpty, "the owner goes with the key")
     }
 
     private static func modelIdentifier() -> String {
@@ -1015,7 +1017,7 @@ struct LicensePage: View {
                             .labelsHidden()
                             .font(.system(.body, design: .monospaced))
                             .multilineTextAlignment(.trailing)
-                            .onSubmit { license.activate(license.draft) }
+                            .onSubmit { license.activate(license.draft, owner: license.ownerDraft) }
                     }
                     LabeledContent("Name or e-mail") {
                         TextField("Name or e-mail", text: $license.ownerDraft, prompt: Text("Optional"))
@@ -1029,7 +1031,7 @@ struct LicensePage: View {
                                 .font(.callout)
                         }
                         Spacer()
-                        Button("Activate") { license.activate(license.draft) }
+                        Button("Activate") { license.activate(license.draft, owner: license.ownerDraft) }
                             .keyboardShortcut(.defaultAction)
                             .disabled(license.draft.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
@@ -1372,10 +1374,12 @@ struct TrialExpiredView: View {
 enum TrialExpiredWindow {
     private static var window: NSWindow?
 
-    static func showIfDue(now: Date = Date()) {
-        guard due(last: UserDefaults.standard.object(forKey: "license.expiredShown") as? Date, now: now) else { return }
+    /// True when it opened.
+    static func showIfDue(now: Date = Date()) -> Bool {
+        guard due(last: UserDefaults.standard.object(forKey: "license.expiredShown") as? Date, now: now) else { return false }
         UserDefaults.standard.set(now, forKey: "license.expiredShown")
         show()
+        return true
     }
 
     nonisolated static func due(last: Date?, now: Date) -> Bool {
